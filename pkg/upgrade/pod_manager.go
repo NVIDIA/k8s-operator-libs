@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/operator-libs/pkg/consts"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -31,6 +30,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubectl/pkg/drain"
+
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
 // PodManagerImpl implements PodManager interface and checks for pod states
@@ -54,7 +56,7 @@ type PodManager interface {
 type PodManagerConfig struct {
 	Selector     string
 	Nodes        []*v1.Node
-	DeletionSpec *PodDeletionSpec
+	DeletionSpec *v1alpha1.PodDeletionSpec
 }
 
 // PodDeletionFilter takes a pod and returns a boolean indicating whether the pod should be deleted

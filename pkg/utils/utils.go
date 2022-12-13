@@ -30,7 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	"github.com/NVIDIA/operator-libs/pkg/consts"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
 const PodTemplateGenerationLabel = "pod-template-generation"

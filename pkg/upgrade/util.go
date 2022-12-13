@@ -14,6 +14,8 @@ limitations under the License.
 package upgrade
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -71,4 +73,34 @@ func (m *KeyedMutex) Lock(key string) UnlockFunc {
 	mtx := value.(*sync.Mutex)
 	mtx.Lock()
 	return func() { mtx.Unlock() }
+}
+
+var (
+	// DriverName is the name of the driver to be managed by this package
+	DriverName string
+)
+
+// SetDriverName sets the name of the driver managed by the upgrade package
+func SetDriverName(driver string) {
+	DriverName = driver
+}
+
+// GetUpgradeStateLabelKey returns state label key used for upgrades
+func GetUpgradeStateLabelKey() string {
+	return fmt.Sprintf(UpgradeStateLabelKeyFmt, DriverName)
+}
+
+// GetUpgradeSkipNodeLabelKey returns node label used to skip upgrades
+func GetUpgradeSkipNodeLabelKey() string {
+	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
+}
+
+// GetUpgradeSkipDrainPodLabelKey returns pod label used to skip eviction during drain
+func GetUpgradeSkipDrainPodLabelKey() string {
+	return fmt.Sprintf(UpgradeSkipDrainPodLabelKeyFmt, DriverName)
+}
+
+// GetEventReason returns the reason type based on the driver name
+func GetEventReason() string {
+	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
 }

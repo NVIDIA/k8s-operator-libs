@@ -27,8 +27,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/operator-libs/pkg/consts"
-	"github.com/NVIDIA/operator-libs/pkg/utils"
+	"github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
 
 // NodeUpgradeState contains a mapping between a node,
@@ -95,7 +96,7 @@ func NewClusterUpdateStateManager(
 // The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
 // ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 func (m *ClusterUpgradeStateManager) ApplyState(ctx context.Context,
-	currentState *ClusterUpgradeState, upgradePolicy *DriverUpgradePolicySpec) error {
+	currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("State Manager, got state update")
 
 	if currentState == nil {
@@ -304,7 +305,7 @@ func (m *ClusterUpgradeStateManager) ProcessCordonRequiredNodes(
 // ProcessWaitForJobsRequiredNodes processes UpgradeStateWaitForJobsRequired nodes,
 // waits for completion of jobs and moves them to UpgradeStatePodDeletionRequired state.
 func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, waitForCompletionSpec *WaitForCompletionSpec) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState, waitForCompletionSpec *v1alpha1.WaitForCompletionSpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessWaitForJobsRequiredNodes")
 
 	var nodes []*v1.Node
@@ -338,7 +339,7 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 // deletes select pods on a node, and moves the nodes to UpgradeStateDrainRequiredRequired state.
 // Pods selected for deletion are determined via PodManager.PodDeletion
 func (m *ClusterUpgradeStateManager) ProcessPodDeletionRequiredNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *PodDeletionSpec) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *v1alpha1.PodDeletionSpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessPodDeletionRequiredNodes")
 
 	podManagerConfig := PodManagerConfig{
@@ -361,7 +362,7 @@ func (m *ClusterUpgradeStateManager) ProcessPodDeletionRequiredNodes(
 // ProcessDrainNodes schedules UpgradeStateDrainRequired nodes for drain.
 // If drain is disabled by upgrade policy, moves the nodes straight to UpgradeStatePodRestartRequired state.
 func (m *ClusterUpgradeStateManager) ProcessDrainNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, drainSpec *DrainSpec) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState, drainSpec *v1alpha1.DrainSpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessDrainNodes")
 	if drainSpec == nil || !drainSpec.Enable {
 		// If node drain is disabled, move nodes straight to PodRestart stage

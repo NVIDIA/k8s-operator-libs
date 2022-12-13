@@ -1,4 +1,4 @@
-module github.com/NVIDIA/operator-libs
+module github.com/NVIDIA/k8s-operator-libs
 
 go 1.18
 

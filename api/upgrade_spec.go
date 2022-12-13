@@ -14,19 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade
+package v1alpha1
 
-import (
-	"fmt"
-	"strings"
-)
-
-var (
-	// DriverName is the name of the driver to be managed by this package
-	DriverName string
-)
+import "k8s.io/apimachinery/pkg/runtime/schema"
 
 // DriverUpgradePolicySpec describes policy configuration for automatic upgrades
+// +kubebuilder:object:root=true
+// +kubebuilder:object:generate=true
 type DriverUpgradePolicySpec struct {
 	// AutoUpgrade is a global switch for automatic upgrade feature
 	// if set to false all other options are ignored
@@ -76,27 +70,31 @@ type PodDeletionSpec struct {
 	DeleteEmptyDir bool `json:"deleteEmptyDir,omitempty"`
 }
 
-// SetDriverName sets the name of the driver managed by the upgrade package
-func SetDriverName(driver string) {
-	DriverName = driver
+// DrainSpec describes configuration for node drain during automatic upgrade
+type DrainSpec struct {
+	// Enable indicates if node draining is allowed during upgrade
+	// +optional
+	// +kubebuilder:default:=false
+	Enable bool `json:"enable,omitempty"`
+	// Force indicates if force draining is allowed
+	// +optional
+	// +kubebuilder:default:=false
+	Force bool `json:"force,omitempty"`
+	// PodSelector specifies a label selector to filter pods on the node that need to be drained
+	// For more details on label selectors, see:
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+	// +optional
+	PodSelector string `json:"podSelector,omitempty"`
+	// TimeoutSecond specifies the length of time in seconds to wait before giving up drain, zero means infinite
+	// +optional
+	// +kubebuilder:default:=300
+	// +kubebuilder:validation:Minimum:=0
+	TimeoutSecond int `json:"timeoutSeconds,omitempty"`
+	// DeleteEmptyDir indicates if should continue even if there are pods using emptyDir
+	// (local data that will be deleted when the node is drained)
+	// +optional
+	// +kubebuilder:default:=false
+	DeleteEmptyDir bool `json:"deleteEmptyDir,omitempty"`
 }
 
-// GetUpgradeStateLabelKey returns state label key used for upgrades
-func GetUpgradeStateLabelKey() string {
-	return fmt.Sprintf(UpgradeStateLabelKeyFmt, DriverName)
-}
-
-// GetUpgradeSkipNodeLabelKey returns node label used to skip upgrades
-func GetUpgradeSkipNodeLabelKey() string {
-	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
-}
-
-// GetUpgradeSkipDrainPodLabelKey returns pod label used to skip eviction during drain
-func GetUpgradeSkipDrainPodLabelKey() string {
-	return fmt.Sprintf(UpgradeSkipDrainPodLabelKeyFmt, DriverName)
-}
-
-// GetEventReason returns the reason type based on the driver name
-func GetEventReason() string {
-	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
-}
+func (obj *DriverUpgradePolicySpec) GetObjectKind() schema.ObjectKind { return nil }

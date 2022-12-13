@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-MODULE := github.com/NVIDIA/operator-libs
+MODULE := github.com/NVIDIA/k8s-operator-libs
 
 DOCKER ?= docker
 
@@ -34,6 +34,15 @@ DOCKER_TARGETS := $(patsubst %, docker-%, $(TARGETS))
 .PHONY: $(TARGETS) $(DOCKER_TARGETS)
 
 GOOS := linux
+
+TOOLSDIR=$(CURDIR)/bin
+
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # This is a requirement for 'setup-envtest.sh' in the test target.
@@ -77,14 +86,21 @@ ineffassign:
 misspell:
 	misspell $(MODULE)/...
 
-generate:
+generate: controller-gen ## Generate code
+	$(CONTROLLER_GEN) object paths="./api"
+
+test-gen:
 	go generate $(MODULE)/...
 
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
-test: generate vet; $(info  running $(NAME:%=% )tests...) @ ## Run tests
+test: test-gen vet; $(info  running $(NAME:%=% )tests...) @ ## Run tests
 	mkdir -p ${ENVTEST_ASSETS_DIR}
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.0/hack/setup-envtest.sh
 	. ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
+
+CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
+controller-gen:	## Download controller-gen locally if necessary
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.10.0)
 
 # Generate an image for containerized builds
 # Note: This image is local only
@@ -116,3 +132,11 @@ $(DOCKER_TARGETS): docker-%: .build-image
 		--user $$(id -u):$$(id -g) \
 		$(BUILDIMAGE) \
 			make $(*)
+
+# go-install-tool will 'go install' any package $2 and install it to $1.
+define go-install-tool
+@[ -f $(1) ] || { \
+echo "Downloading $(2)" ;\
+GOBIN=$(TOOLSDIR) go install $(2) ;\
+}
+endef

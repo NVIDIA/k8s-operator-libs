@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/operator-libs/pkg/consts"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
 // NodeUpgradeStateProvider allows for synchronized operations on node objects and ensures that the node,

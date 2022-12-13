@@ -28,9 +28,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/operator-libs/pkg/upgrade"
-	"github.com/NVIDIA/operator-libs/pkg/upgrade/mocks"
-	"github.com/NVIDIA/operator-libs/pkg/utils"
+	"github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
 
 var _ = Describe("UpgradeStateManager tests", func() {
@@ -39,7 +40,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		stateManager := upgrade.NewClusterUpdateStateManager(
 			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
-		Expect(stateManager.ApplyState(ctx, nil, &upgrade.DriverUpgradePolicySpec{})).ToNot(Succeed())
+		Expect(stateManager.ApplyState(ctx, nil, &v1alpha1.DriverUpgradePolicySpec{})).ToNot(Succeed())
 	})
 	It("UpgradeStateManager should not fail on nil upgradePolicy", func() {
 		ctx := context.TODO()
@@ -76,7 +77,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		stateManager := upgrade.NewClusterUpdateStateManager(
 			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
-		Expect(stateManager.ApplyState(ctx, &clusterState, &upgrade.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
 		Expect(getNodeUpgradeState(UnknownToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 		Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
@@ -96,7 +97,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 			// Unlimited upgrades
 			MaxParallelUpgrades: 0,
@@ -130,7 +131,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade:         true,
 			MaxParallelUpgrades: maxParallelUpgrades,
 		}
@@ -164,10 +165,10 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = upgradeRequiredNodes
 		clusterState.NodeStates[upgrade.UpgradeStateCordonRequired] = cordonRequiredNodes
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade:         true,
 			MaxParallelUpgrades: maxParallelUpgrades,
-			DrainSpec: &upgrade.DrainSpec{
+			DrainSpec: &v1alpha1.DrainSpec{
 				Enable: true,
 			},
 		}
@@ -194,13 +195,13 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
 		}
 
-		policyWithNoDrainSpec := &upgrade.DriverUpgradePolicySpec{
+		policyWithNoDrainSpec := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
 
-		policyWithDisabledDrain := &upgrade.DriverUpgradePolicySpec{
+		policyWithDisabledDrain := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
-			DrainSpec: &upgrade.DrainSpec{
+			DrainSpec: &v1alpha1.DrainSpec{
 				Enable: false,
 			},
 		}
@@ -234,9 +235,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
 		}
 
-		policy := upgrade.DriverUpgradePolicySpec{
+		policy := v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
-			DrainSpec: &upgrade.DrainSpec{
+			DrainSpec: &v1alpha1.DrainSpec{
 				Enable: true,
 			},
 		}
@@ -271,9 +272,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
 		}
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
-			DrainSpec: &upgrade.DrainSpec{
+			DrainSpec: &v1alpha1.DrainSpec{
 				Enable: true,
 			},
 		}
@@ -322,7 +323,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
 
@@ -368,7 +369,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
 
@@ -390,7 +391,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
 
@@ -419,7 +420,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		policy := &upgrade.DriverUpgradePolicySpec{
+		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
 

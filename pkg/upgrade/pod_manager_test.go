@@ -29,7 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/NVIDIA/operator-libs/pkg/upgrade"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("PodManager", func() {
@@ -52,7 +53,7 @@ var _ = Describe("PodManager", func() {
 		podManagerConfig = upgrade.PodManagerConfig{
 			Selector: "",
 			Nodes:    []*corev1.Node{node},
-			DeletionSpec: &upgrade.PodDeletionSpec{
+			DeletionSpec: &v1alpha1.PodDeletionSpec{
 				Force:          false,
 				TimeoutSecond:  300,
 				DeleteEmptyDir: false,
