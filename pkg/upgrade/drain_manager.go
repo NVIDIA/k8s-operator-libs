@@ -20,44 +20,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/operator-libs/pkg/consts"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubectl/pkg/drain"
-)
 
-// DrainSpec describes configuration for node drain during automatic upgrade
-type DrainSpec struct {
-	// Enable indicates if node draining is allowed during upgrade
-	// +optional
-	// +kubebuilder:default:=false
-	Enable bool `json:"enable,omitempty"`
-	// Force indicates if force draining is allowed
-	// +optional
-	// +kubebuilder:default:=false
-	Force bool `json:"force,omitempty"`
-	// PodSelector specifies a label selector to filter pods on the node that need to be drained
-	// For more details on label selectors, see:
-	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
-	// +optional
-	PodSelector string `json:"podSelector,omitempty"`
-	// TimeoutSecond specifies the length of time in seconds to wait before giving up drain, zero means infinite
-	// +optional
-	// +kubebuilder:default:=300
-	// +kubebuilder:validation:Minimum:=0
-	TimeoutSecond int `json:"timeoutSeconds,omitempty"`
-	// DeleteEmptyDir indicates if should continue even if there are pods using emptyDir
-	// (local data that will be deleted when the node is drained)
-	// +optional
-	// +kubebuilder:default:=false
-	DeleteEmptyDir bool `json:"deleteEmptyDir,omitempty"`
-}
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
+)
 
 // DrainConfiguration contains the drain specification and the list of nodes to schedule drain on
 type DrainConfiguration struct {
-	Spec  *DrainSpec
+	Spec  *v1alpha1.DrainSpec
 	Nodes []*corev1.Node
 }
 

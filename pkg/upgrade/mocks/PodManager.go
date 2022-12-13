@@ -17,7 +17,7 @@ package mocks
 import (
 	context "context"
 
-	upgrade "github.com/NVIDIA/operator-libs/pkg/upgrade"
+	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	mock "github.com/stretchr/testify/mock"
 
 	v1 "k8s.io/api/core/v1"

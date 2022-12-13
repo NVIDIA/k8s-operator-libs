@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/NVIDIA/operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("CordonManager tests", func() {

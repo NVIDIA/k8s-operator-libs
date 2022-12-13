@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -40,9 +41,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/NVIDIA/operator-libs/pkg/upgrade"
-	"github.com/NVIDIA/operator-libs/pkg/upgrade/mocks"
-	"k8s.io/client-go/tools/record"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
 	// +kubebuilder:scaffold:imports
 )
 

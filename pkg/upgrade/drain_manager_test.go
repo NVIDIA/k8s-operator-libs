@@ -25,7 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/NVIDIA/operator-libs/pkg/upgrade"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("DrainManager tests", func() {
@@ -35,7 +36,7 @@ var _ = Describe("DrainManager tests", func() {
 		node := createNode("node")
 
 		drainManager := upgrade.NewDrainManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, eventRecorder)
-		drainSpec := &upgrade.DrainSpec{
+		drainSpec := &v1alpha1.DrainSpec{
 			Enable:         true,
 			Force:          false,
 			PodSelector:    "",
@@ -61,7 +62,7 @@ var _ = Describe("DrainManager tests", func() {
 		node3 := createNode("node3")
 
 		drainManager := upgrade.NewDrainManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, eventRecorder)
-		drainSpec := &upgrade.DrainSpec{
+		drainSpec := &v1alpha1.DrainSpec{
 			Enable:         true,
 			Force:          false,
 			PodSelector:    "",
@@ -93,7 +94,7 @@ var _ = Describe("DrainManager tests", func() {
 		ctx := context.TODO()
 
 		drainManager := upgrade.NewDrainManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, eventRecorder)
-		drainSpec := &upgrade.DrainSpec{
+		drainSpec := &v1alpha1.DrainSpec{
 			Enable:         true,
 			Force:          false,
 			PodSelector:    "",
@@ -131,7 +132,7 @@ var _ = Describe("DrainManager tests", func() {
 		drainManager := upgrade.NewDrainManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, eventRecorder)
 
 		nodeArray := []*corev1.Node{node}
-		err := drainManager.ScheduleNodesDrain(ctx, &upgrade.DrainConfiguration{Nodes: nodeArray, Spec: &upgrade.DrainSpec{}})
+		err := drainManager.ScheduleNodesDrain(ctx, &upgrade.DrainConfiguration{Nodes: nodeArray, Spec: &v1alpha1.DrainSpec{}})
 		Expect(err).To(Succeed())
 
 		time.Sleep(time.Second)
@@ -150,7 +151,7 @@ var _ = Describe("DrainManager tests", func() {
 
 		nodeArray := []*corev1.Node{node}
 		err := drainManager.ScheduleNodesDrain(
-			ctx, &upgrade.DrainConfiguration{Nodes: nodeArray, Spec: &upgrade.DrainSpec{Enable: false}})
+			ctx, &upgrade.DrainConfiguration{Nodes: nodeArray, Spec: &v1alpha1.DrainSpec{Enable: false}})
 		Expect(err).To(Succeed())
 
 		time.Sleep(time.Second)
