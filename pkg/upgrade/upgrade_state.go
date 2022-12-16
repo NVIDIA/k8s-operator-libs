@@ -220,6 +220,18 @@ func (m *ClusterUpgradeStateManager) ProcessDoneOrUnknownNodes(
 			return err
 		}
 		if podTemplateGeneration != nodeState.DriverDaemonSet.GetGeneration() {
+			// If node requires upgrade and is Unschedulable, track this in an
+			// annotation and leave node in Unschedulable state when upgrade completes.
+			if isNodeUnschedulable(nodeState.Node) {
+				annotationKey := GetUpgradeInitialStateAnnotationKey()
+				annotationValue := "true"
+				m.Log.V(consts.LogLevelInfo).Info("Node is unschedulable, adding annotation to track initial state of the node",
+					"node", nodeState.Node.Name, "annotation", annotationKey)
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, annotationValue)
+				if err != nil {
+					return err
+				}
+			}
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateUpgradeRequired)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
@@ -429,12 +441,32 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 				return err
 			}
 			if driverPodInSync {
-				err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(
-					ctx, nodeState.Node, UpgradeStateUncordonRequired)
+				newUpgradeState := UpgradeStateUncordonRequired
+				// If node was Unschedulable at beginning of upgrade, skip the
+				// uncordon state so that node remains in the same state as
+				// when the upgrade started.
+				annotationKey := GetUpgradeInitialStateAnnotationKey()
+				if _, ok := nodeState.Node.Annotations[annotationKey]; ok {
+					m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
+						"node", nodeState.Node.Name)
+					newUpgradeState = UpgradeStateDone
+				}
+
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(
+					ctx, nodeState.Node, newUpgradeState)
 				if err != nil {
 					m.Log.V(consts.LogLevelError).Error(
-						err, "Failed to change node upgrade state", "state", UpgradeStateUncordonRequired)
+						err, "Failed to change node upgrade state", "state", newUpgradeState)
 					return err
+				}
+
+				if newUpgradeState == UpgradeStateDone {
+					m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
+						"node", nodeState.Node.Name, "annotation", annotationKey)
+					err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, "null")
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -458,11 +490,31 @@ func (m *ClusterUpgradeStateManager) ProcessUpgradeFailedNodes(
 			return err
 		}
 		if driverPodInSync {
-			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateUncordonRequired)
+			newUpgradeState := UpgradeStateUncordonRequired
+			// If node was Unschedulable at beginning of upgrade, skip the
+			// uncordon state so that node remains in the same state as
+			// when the upgrade started.
+			annotationKey := GetUpgradeInitialStateAnnotationKey()
+			if _, ok := nodeState.Node.Annotations[annotationKey]; ok {
+				m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
+					"node", nodeState.Node.Name)
+				newUpgradeState = UpgradeStateDone
+			}
+
+			err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, newUpgradeState)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
-					err, "Failed to change node upgrade state", "state", UpgradeStateUncordonRequired)
+					err, "Failed to change node upgrade state", "state", newUpgradeState)
 				return err
+			}
+
+			if newUpgradeState == UpgradeStateDone {
+				m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
+					"node", nodeState.Node.Name, "annotation", annotationKey)
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, "null")
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -523,6 +575,13 @@ func (m *ClusterUpgradeStateManager) isDriverPodInSync(nodeState *NodeUpgradeSta
 // skipNodeUpgrade returns true if node is labelled to skip driver upgrades
 func (m *ClusterUpgradeStateManager) skipNodeUpgrade(node *v1.Node) bool {
 	if node.Labels[GetUpgradeSkipNodeLabelKey()] == "true" {
+		return true
+	}
+	return false
+}
+
+func isNodeUnschedulable(node *v1.Node) bool {
+	if node.Spec.Unschedulable {
 		return true
 	}
 	return false

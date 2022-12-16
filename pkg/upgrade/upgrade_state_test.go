@@ -28,7 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/k8s-operator-libs/api"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
@@ -82,6 +82,53 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 		Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 		Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+	})
+	It("UpgradeStateManager should move outdated nodes to UpgradeRequired state and annotate node if unschedulable", func() {
+		ctx := context.TODO()
+
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 2}}
+		upToDatePod := &corev1.Pod{
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "2"}}}
+		outdatedPod := &corev1.Pod{
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "1"}}}
+
+		UnknownToDoneNode := nodeWithUpgradeState("")
+		UnknownToUpgradeRequiredNode := nodeWithUpgradeState("")
+		DoneToDoneNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
+		DoneToUpgradeRequiredNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
+
+		UnknownToUpgradeRequiredNode.Spec.Unschedulable = true
+		DoneToUpgradeRequiredNode.Spec.Unschedulable = true
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		unknownNodes := []*upgrade.NodeUpgradeState{
+			{Node: UnknownToDoneNode, DriverPod: upToDatePod, DriverDaemonSet: daemonSet},
+			{Node: UnknownToUpgradeRequiredNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+		}
+		doneNodes := []*upgrade.NodeUpgradeState{
+			{Node: DoneToDoneNode, DriverPod: upToDatePod, DriverDaemonSet: daemonSet},
+			{Node: DoneToUpgradeRequiredNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+		}
+		clusterState.NodeStates[""] = unknownNodes
+		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
+
+		stateManager := upgrade.NewClusterUpdateStateManager(
+			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(getNodeUpgradeState(UnknownToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
+		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+		Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
+		Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+
+		Expect(isUnschedulableAnnotationPresent(UnknownToUpgradeRequiredNode)).
+			To(Equal(true))
+		Expect(isUnschedulableAnnotationPresent(DoneToUpgradeRequiredNode)).
+			To(Equal(true))
+		Expect(isUnschedulableAnnotationPresent(UnknownToDoneNode)).
+			To(Equal(false))
+		Expect(isUnschedulableAnnotationPresent(DoneToDoneNode)).
+			To(Equal(false))
+
 	})
 	It("UpgradeStateManager should schedule upgrade on all nodes if maxParallel upgrades is set to 0", func() {
 		ctx := context.TODO()
@@ -339,8 +386,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			&drainManager, &podManagerMock, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 	})
-	It("UpgradeStateManager should move pod to UncordonRequired state"+
-		"if it's in PodRestart or DrainFailed, up to date and ready", func() {
+	It("UpgradeStateManager should move pod to UncordonRequired state "+
+		"if it's in PodRestart or UpgradeFailed, up to date and ready", func() {
 		ctx := context.TODO()
 
 		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
@@ -350,8 +397,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
 			},
 			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
-		podRestartNode := nodeWithUpgradeState(upgrade.UpgradeStatePodRestartRequired)
-		drainFailedNode := nodeWithUpgradeState(upgrade.UpgradeStateFailed)
+		podRestartNode := NewNode("pod-restart-node").WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).Create()
+		upgradeFailedNode := NewNode("upgrade-failed-node").WithUpgradeState(upgrade.UpgradeStateFailed).Create()
 
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
@@ -363,7 +410,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 		clusterState.NodeStates[upgrade.UpgradeStateFailed] = []*upgrade.NodeUpgradeState{
 			{
-				Node:            drainFailedNode,
+				Node:            upgradeFailedNode,
 				DriverPod:       pod,
 				DriverDaemonSet: daemonSet,
 			},
@@ -377,7 +424,58 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
-		Expect(getNodeUpgradeState(drainFailedNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+	})
+	It("UpgradeStateManager should move pod to UpgradeDone state "+
+		"if it's in PodRestart or UpgradeFailed, driver pod is up-to-date and ready, and node was initially Unschedulable", func() {
+		ctx := context.TODO()
+
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		pod := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase:             "Running",
+				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+			},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+		podRestartNode := NewNode("pod-restart-node-unschedulable").
+			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
+			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
+			Unschedulable(true).
+			Create()
+		upgradeFailedNode := NewNode("upgrade-failed-node-unschedulable").
+			WithUpgradeState(upgrade.UpgradeStateFailed).
+			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
+			Unschedulable(true).
+			Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            podRestartNode,
+				DriverPod:       pod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+		clusterState.NodeStates[upgrade.UpgradeStateFailed] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            upgradeFailedNode,
+				DriverPod:       pod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		stateManager := upgrade.NewClusterUpdateStateManager(
+			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateDone))
+		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateDone))
+		// unschedulable annotation should be removed
+		Expect(isUnschedulableAnnotationPresent(podRestartNode)).To(Equal(false))
+		Expect(isUnschedulableAnnotationPresent(upgradeFailedNode)).To(Equal(false))
 	})
 	It("UpgradeStateManager should uncordon UncordonRequired pod and finish upgrade", func() {
 		ctx := context.TODO()
@@ -439,5 +537,10 @@ var _ = Describe("UpgradeStateManager tests", func() {
 })
 
 func nodeWithUpgradeState(state string) *corev1.Node {
-	return &corev1.Node{ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.GetUpgradeStateLabelKey(): state}}}
+	return &corev1.Node{
+		ObjectMeta: v1.ObjectMeta{
+			Labels:      map[string]string{upgrade.GetUpgradeStateLabelKey(): state},
+			Annotations: map[string]string{},
+		},
+	}
 }
