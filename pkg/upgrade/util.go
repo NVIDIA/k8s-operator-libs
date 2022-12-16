@@ -100,6 +100,11 @@ func GetUpgradeSkipDrainPodLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipDrainPodLabelKeyFmt, DriverName)
 }
 
+// GetUpgradeInitialStateAnnotationKey returns state label key used for upgrades
+func GetUpgradeInitialStateAnnotationKey() string {
+	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)
+}
+
 // GetEventReason returns the reason type based on the driver name
 func GetEventReason() string {
 	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))

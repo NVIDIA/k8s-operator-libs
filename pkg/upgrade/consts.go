@@ -23,6 +23,8 @@ const (
 	UpgradeSkipDrainPodLabelKeyFmt = "nvidia.com/%s-driver-upgrade-drain.skip"
 	// UpgradeSkipNodeLabelKeyFmt is the format of the node label boolean key indicating to skip driver upgrade
 	UpgradeSkipNodeLabelKeyFmt = "nvidia.com/%s-driver-upgrade.skip"
+	// UpgradeInitialStateAnnotationKeyFmt is the format of the node annotation indicating node was unschedulable at beginning of upgrade process
+	UpgradeInitialStateAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade.node-initial-state.unschedulable"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade

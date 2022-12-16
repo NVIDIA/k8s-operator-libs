@@ -101,6 +101,26 @@ var _ = BeforeSuite(func() {
 			node.Labels[upgrade.GetUpgradeStateLabelKey()] = newNodeState
 			return nil
 		})
+	nodeUpgradeStateProvider.
+		On("ChangeNodeUpgradeAnnotation", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, node *corev1.Node, key string, value string) error {
+			if value == "null" {
+				delete(node.Annotations, key)
+			} else {
+				node.Annotations[key] = value
+			}
+			return nil
+		})
+	nodeUpgradeStateProvider.
+		On("GetNode", mock.Anything, mock.Anything).
+		Return(
+			func(ctx context.Context, nodeName string) *corev1.Node {
+				return getNode(nodeName)
+			},
+			func(ctx context.Context, nodeName string) error {
+				return nil
+			},
+		)
 
 	drainManager = mocks.DrainManager{}
 	drainManager.
@@ -155,6 +175,53 @@ var _ = AfterEach(func() {
 		}
 	}
 })
+
+type Node struct {
+	*corev1.Node
+}
+
+func NewNode(name string) Node {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Labels:      map[string]string{"dummy-key": "dummy-value"},
+			Annotations: map[string]string{"dummy-key": "dummy-value"},
+		},
+	}
+	Expect(node.Labels).NotTo(BeNil())
+	return Node{node}
+}
+
+func (n Node) WithUpgradeState(state string) Node {
+	if n.Labels == nil {
+		n.Labels = make(map[string]string)
+	}
+	n.Labels[upgrade.GetUpgradeStateLabelKey()] = state
+	return n
+}
+
+func (n Node) WithLabels(l map[string]string) Node {
+	n.Labels = l
+	return n
+}
+
+func (n Node) WithAnnotations(a map[string]string) Node {
+	n.Annotations = a
+	return n
+}
+
+func (n Node) Unschedulable(b bool) Node {
+	n.Spec.Unschedulable = b
+	return n
+}
+
+func (n Node) Create() *corev1.Node {
+	node := n.Node
+	err := k8sClient.Create(context.TODO(), node)
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, node)
+	return node
+}
 
 type Pod struct {
 	*corev1.Pod
@@ -215,11 +282,11 @@ func (p Pod) Create() *corev1.Pod {
 	err := k8sClient.Create(context.TODO(), pod)
 	Expect(err).NotTo(HaveOccurred())
 
-	// set Pod in Running state
+	// set Pod in Running state and mark Container as Ready
 	pod.Status.Phase = corev1.PodRunning
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Ready: true}}
 	err = k8sClient.Status().Update(context.TODO(), pod)
 	Expect(err).NotTo(HaveOccurred())
-
 	createdObjects = append(createdObjects, pod)
 	return pod
 }
@@ -334,6 +401,11 @@ func deleteObj(obj client.Object) {
 
 func getNodeUpgradeState(node *corev1.Node) string {
 	return node.Labels[upgrade.GetUpgradeStateLabelKey()]
+}
+
+func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[upgrade.GetUpgradeInitialStateAnnotationKey()]
+	return ok
 }
 
 func randSeq(n int) string {
