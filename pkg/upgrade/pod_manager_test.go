@@ -199,6 +199,9 @@ var _ = Describe("PodManager", func() {
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
+			// add a slight delay to let go routines to delete pods and run to completion
+			time.Sleep(100 * time.Millisecond)
+
 			// check number of pods still running in namespace
 			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})
 			Expect(err).To(Succeed())
@@ -226,6 +229,9 @@ var _ = Describe("PodManager", func() {
 			// when deleting pods on a node. The node will be transitioned to the UpgradeFailed
 			// state so upgrade can proceed with rest of nodes.
 			Expect(err).To(Succeed())
+
+			// add a slight delay to let go routines to run to completion on pod eviction to update nodes states
+			time.Sleep(100 * time.Millisecond)
 
 			// check number of pods still running in namespace
 			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})
@@ -257,6 +263,9 @@ var _ = Describe("PodManager", func() {
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
+			// add a slight delay to let go routines to delete pods and run to completion
+			time.Sleep(100 * time.Millisecond)
+
 			// check number of pods still running in namespace
 			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})
 			Expect(err).To(Succeed())
@@ -284,6 +293,9 @@ var _ = Describe("PodManager", func() {
 			// when deleting pods on a node. The node will be transitioned to the UpgradeFailed
 			// state so upgrade can proceed with rest of nodes.
 			Expect(err).To(Succeed())
+
+			// add a slight delay to let go routines to run to completion on pod eviction to update nodes states
+			time.Sleep(100 * time.Millisecond)
 
 			// check number of pods still running in namespace
 			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})

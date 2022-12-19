@@ -101,17 +101,12 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 		AdditionalFilters:   []drain.PodFilter{customDrainFilter},
 	}
 
-	var wg sync.WaitGroup
 	for _, node := range config.Nodes {
 		if !m.nodesInProgress.Has(node.Name) {
 			m.log.V(consts.LogLevelInfo).Info("Deleting pods on node", "node", node.Name)
 			m.nodesInProgress.Add(node.Name)
 
-			// Increment the WaitGroup counter.
-			wg.Add(1)
 			go func(node corev1.Node) {
-				// Decrement the counter when the goroutine completes.
-				defer wg.Done()
 				defer m.nodesInProgress.Remove(node.Name)
 
 				m.log.V(consts.LogLevelInfo).Info("Identifying pods to delete", "node", node.Name)
@@ -173,8 +168,6 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 			m.log.V(consts.LogLevelInfo).Info("Node is already getting pods deleted, skipping", "node", node.Name)
 		}
 	}
-	// Wait for all goroutines to complete
-	wg.Wait()
 	return nil
 }
 
