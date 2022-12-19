@@ -27,7 +27,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/k8s-operator-libs/api"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
@@ -585,4 +585,55 @@ func isNodeUnschedulable(node *v1.Node) bool {
 		return true
 	}
 	return false
+}
+
+// GetUpgradesInProgress returns count of nodes on which upgrade is in progress
+func (m *ClusterUpgradeStateManager) GetUpgradesInProgress(ctx context.Context,
+	currentState *ClusterUpgradeState) int {
+	return len(currentState.NodeStates[UpgradeStateCordonRequired]) +
+		len(currentState.NodeStates[UpgradeStateDrainRequired]) +
+		len(currentState.NodeStates[UpgradeStatePodRestartRequired]) +
+		len(currentState.NodeStates[UpgradeStateWaitForJobsRequired]) +
+		len(currentState.NodeStates[UpgradeStatePodDeletionRequired]) +
+		len(currentState.NodeStates[UpgradeStateFailed]) +
+		len(currentState.NodeStates[UpgradeStateUncordonRequired])
+}
+
+// GetUpgradesDone returns count of nodes on which upgrade is complete
+func (m *ClusterUpgradeStateManager) GetUpgradesDone(ctx context.Context,
+	currentState *ClusterUpgradeState) int {
+	return len(currentState.NodeStates[UpgradeStateDone])
+}
+
+// GetUpgradesAvailable returns count of nodes on which upgrade can be done
+func (m *ClusterUpgradeStateManager) GetUpgradesAvailable(ctx context.Context,
+	currentState *ClusterUpgradeState, maxParallelUpgrades int) int {
+	upgradesInProgress := len(currentState.NodeStates[UpgradeStateCordonRequired]) +
+		len(currentState.NodeStates[UpgradeStateDrainRequired]) +
+		len(currentState.NodeStates[UpgradeStatePodRestartRequired]) +
+		len(currentState.NodeStates[UpgradeStateWaitForJobsRequired]) +
+		len(currentState.NodeStates[UpgradeStatePodDeletionRequired]) +
+		len(currentState.NodeStates[UpgradeStateFailed]) +
+		len(currentState.NodeStates[UpgradeStateUncordonRequired])
+
+	var upgradesAvailable int
+	if maxParallelUpgrades == 0 {
+		// Only nodes in UpgradeStateUpgradeRequired can start upgrading, so all of them will move to drain stage
+		upgradesAvailable = len(currentState.NodeStates[UpgradeStateUpgradeRequired])
+	} else {
+		upgradesAvailable = maxParallelUpgrades - upgradesInProgress
+	}
+	return upgradesAvailable
+}
+
+// GetUpgradesFailed returns count of nodes on which upgrades have failed
+func (m *ClusterUpgradeStateManager) GetUpgradesFailed(ctx context.Context,
+	currentState *ClusterUpgradeState) int {
+	return len(currentState.NodeStates[UpgradeStateFailed])
+}
+
+// GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
+func (m *ClusterUpgradeStateManager) GetUpgradesPending(ctx context.Context,
+	currentState *ClusterUpgradeState) int {
+	return len(currentState.NodeStates[UpgradeStateUpgradeRequired])
 }
