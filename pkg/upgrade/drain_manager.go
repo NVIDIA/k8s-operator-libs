@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -58,7 +57,6 @@ type DrainManager interface {
 // otherwise it moves to UpgradeStateFailed state.
 func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *DrainConfiguration) error {
 	m.log.V(consts.LogLevelInfo).Info("Drain Manager, starting Node Drain")
-	var wg sync.WaitGroup
 
 	if len(drainConfig.Nodes) == 0 {
 		m.log.V(consts.LogLevelInfo).Info("Drain Manager, no nodes scheduled to drain")
@@ -107,11 +105,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 			m.eventRecorder.Event(node, corev1.EventTypeNormal, GetEventReason(), "Scheduling drain of the node")
 
 			m.drainingNodes.Add(node.Name)
-			// Increment the counter for each drain routine
-			wg.Add(1)
 			go func() {
-				// Decrement the counter when the drain operation completes
-				defer wg.Done()
 				defer m.drainingNodes.Remove(node.Name)
 				err := drain.RunCordonOrUncordon(drainHelper, node, true)
 				if err != nil {
@@ -138,8 +132,6 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 			m.log.V(consts.LogLevelInfo).Info("Node is already being drained, skipping", "node", node.Name)
 		}
 	}
-	// Wait for all drain operations to complete on all nodes
-	wg.Wait()
 	return nil
 }
 
