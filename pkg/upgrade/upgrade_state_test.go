@@ -35,23 +35,28 @@ import (
 )
 
 var _ = Describe("UpgradeStateManager tests", func() {
-	It("UpgradeStateManager should fail on nil currentState", func() {
-		ctx := context.TODO()
+	var ctx context.Context
+	var stateManager *upgrade.ClusterUpgradeStateManager
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+	BeforeEach(func() {
+		ctx = context.TODO()
+		// Create new ClusterUpgradeStateManager using mocked managers initialized in BeforeSuite()
+		var err error
+		stateManager, err = upgrade.NewClusterUpdateStateManager(log, k8sConfig, eventRecorder, nil)
+		Expect(err).NotTo(HaveOccurred())
+		stateManager.NodeUpgradeStateProvider = &nodeUpgradeStateProvider
+		stateManager.DrainManager = &drainManager
+		stateManager.CordonManager = &cordonManager
+		stateManager.PodManager = &podManager
+	})
+
+	It("UpgradeStateManager should fail on nil currentState", func() {
 		Expect(stateManager.ApplyState(ctx, nil, &v1alpha1.DriverUpgradePolicySpec{})).ToNot(Succeed())
 	})
 	It("UpgradeStateManager should not fail on nil upgradePolicy", func() {
-		ctx := context.TODO()
-
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &upgrade.ClusterUpgradeState{}, nil)).To(Succeed())
 	})
 	It("UpgradeStateManager should move up-to-date nodes to Done and outdated nodes to UpgradeRequired states", func() {
-		ctx := context.TODO()
-
 		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 2}}
 		upToDatePod := &corev1.Pod{
 			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "2"}}}
@@ -75,8 +80,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		clusterState.NodeStates[""] = unknownNodes
 		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
 		Expect(getNodeUpgradeState(UnknownToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
@@ -112,8 +115,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		clusterState.NodeStates[""] = unknownNodes
 		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
 		Expect(getNodeUpgradeState(UnknownToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
@@ -131,8 +132,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 	})
 	It("UpgradeStateManager should schedule upgrade on all nodes if maxParallel upgrades is set to 0", func() {
-		ctx := context.TODO()
-
 		clusterState := upgrade.NewClusterUpgradeState()
 		nodeStates := []*upgrade.NodeUpgradeState{
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
@@ -150,8 +149,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			MaxParallelUpgrades: 0,
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		stateCount := make(map[string]int)
 		for i := range nodeStates {
@@ -163,8 +160,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	})
 	It("UpgradeStateManager should start upgrade on limited amount of nodes "+
 		"if maxParallel upgrades is less than node count", func() {
-		ctx := context.TODO()
-
 		const maxParallelUpgrades = 3
 
 		clusterState := upgrade.NewClusterUpgradeState()
@@ -183,8 +178,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			MaxParallelUpgrades: maxParallelUpgrades,
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		stateCount := make(map[string]int)
 		for i := range nodeStates {
@@ -195,8 +188,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(maxParallelUpgrades))
 	})
 	It("UpgradeStateManager should start additional upgrades if maxParallelUpgrades limit is not reached", func() {
-		ctx := context.TODO()
-
 		const maxParallelUpgrades = 4
 
 		upgradeRequiredNodes := []*upgrade.NodeUpgradeState{
@@ -220,8 +211,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		stateCount := make(map[string]int)
 		for _, state := range append(upgradeRequiredNodes, cordonRequiredNodes...) {
@@ -233,8 +222,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			stateCount[upgrade.UpgradeStateWaitForJobsRequired]).To(Equal(4))
 	})
 	It("UpgradeStateManager should skip drain if it's disabled by policy", func() {
-		ctx := context.TODO()
-
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] = []*upgrade.NodeUpgradeState{
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
@@ -253,8 +240,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
 		for _, state := range clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] {
 			Expect(getNodeUpgradeState(state.Node)).To(Equal(upgrade.UpgradeStatePodRestartRequired))
@@ -271,8 +256,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 	})
 	It("UpgradeStateManager should schedule drain for UpgradeStateDrainRequired nodes and pass drain config", func() {
-		ctx := context.TODO()
-
 		skipDrainPodSelector := fmt.Sprintf("%s!=true", upgrade.GetUpgradeSkipDrainPodLabelKey())
 
 		clusterState := upgrade.NewClusterUpgradeState()
@@ -301,8 +284,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				Expect(config.Nodes).To(HaveLen(3))
 				return nil
 			})
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManagerMock, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+		stateManager.DrainManager = &drainManagerMock
+
 		Expect(stateManager.ApplyState(ctx, &clusterState, &policy)).To(Succeed())
 
 		policy.DrainSpec.PodSelector = "test-label=test-value"
@@ -310,8 +293,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateManager.ApplyState(ctx, &clusterState, &policy)).To(Succeed())
 	})
 	It("UpgradeStateManager should fail if drain manager returns an error", func() {
-		ctx := context.TODO()
-
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] = []*upgrade.NodeUpgradeState{
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
@@ -332,13 +313,11 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Return(func(ctx context.Context, config *upgrade.DrainConfiguration) error {
 				return errors.New("drain failed")
 			})
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManagerMock, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+		stateManager.DrainManager = &drainManagerMock
+
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).ToNot(Succeed())
 	})
 	It("UpgradeStateManager should not restart pod if it's up to date or already terminating", func() {
-		ctx := context.TODO()
-
 		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
 		upToDatePod := &corev1.Pod{
 			Status:     corev1.PodStatus{Phase: "Running"},
@@ -382,14 +361,12 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				Expect(podsToDelete[0]).To(Equal(outdatedRunningPod))
 				return nil
 			})
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManagerMock, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
+		stateManager.PodManager = &podManagerMock
+
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 	})
 	It("UpgradeStateManager should move pod to UncordonRequired state "+
 		"if it's in PodRestart or UpgradeFailed, up to date and ready", func() {
-		ctx := context.TODO()
-
 		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
 		pod := &corev1.Pod{
 			Status: corev1.PodStatus{
@@ -420,8 +397,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
 		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
@@ -468,8 +443,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManager, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateDone))
 		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateDone))
@@ -478,8 +451,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(isUnschedulableAnnotationPresent(upgradeFailedNode)).To(Equal(false))
 	})
 	It("UpgradeStateManager should uncordon UncordonRequired pod and finish upgrade", func() {
-		ctx := context.TODO()
-
 		node := nodeWithUpgradeState(upgrade.UpgradeStateUncordonRequired)
 
 		clusterState := upgrade.NewClusterUpgradeState()
@@ -500,15 +471,12 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				Expect(node).To(Equal(node))
 				return nil
 			})
+		stateManager.CordonManager = &cordonManagerMock
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManagerMock, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateDone))
 	})
 	It("UpgradeStateManager should fail if cordonManager fails", func() {
-		ctx := context.TODO()
-
 		node := nodeWithUpgradeState(upgrade.UpgradeStateUncordonRequired)
 
 		clusterState := upgrade.NewClusterUpgradeState()
@@ -528,9 +496,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Return(func(ctx context.Context, node *corev1.Node) error {
 				return errors.New("cordonManagerFailed")
 			})
+		stateManager.CordonManager = &cordonManagerMock
 
-		stateManager := upgrade.NewClusterUpdateStateManager(
-			&drainManager, &podManager, &cordonManagerMock, &nodeUpgradeStateProvider, log, k8sClient, k8sInterface, eventRecorder)
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).ToNot(Succeed())
 		Expect(getNodeUpgradeState(node)).ToNot(Equal(upgrade.UpgradeStateDone))
 	})
