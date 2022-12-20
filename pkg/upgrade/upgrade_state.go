@@ -22,8 +22,11 @@ import (
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -35,8 +38,8 @@ import (
 // NodeUpgradeState contains a mapping between a node,
 // the driver POD running on them and the daemon set, controlling this pod
 type NodeUpgradeState struct {
-	Node            *v1.Node
-	DriverPod       *v1.Pod
+	Node            *corev1.Node
+	DriverPod       *corev1.Pod
 	DriverDaemonSet *appsv1.DaemonSet
 }
 
@@ -56,38 +59,161 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 // ClusterUpgradeStateManager serves as a state machine for the ClusterUpgradeState
 // It processes each node and based on its state schedules the required jobs to change their state to the next one
 type ClusterUpgradeStateManager struct {
-	K8sClient                client.Client
-	K8sInterface             kubernetes.Interface
-	Log                      logr.Logger
+	Log           logr.Logger
+	K8sClient     client.Client
+	K8sInterface  kubernetes.Interface
+	EventRecorder record.EventRecorder
+
 	DrainManager             DrainManager
 	PodManager               PodManager
 	CordonManager            CordonManager
 	NodeUpgradeStateProvider NodeUpgradeStateProvider
-	EventRecorder            record.EventRecorder
-	Namespace                v1.Namespace
 }
 
 // NewClusterUpdateStateManager creates a new instance of ClusterUpgradeStateManager
 func NewClusterUpdateStateManager(
-	drainManager DrainManager,
-	podManager PodManager,
-	cordonManager CordonManager,
-	nodeUpgradeStateProvider NodeUpgradeStateProvider,
 	log logr.Logger,
-	k8sClient client.Client,
-	k8sInterface kubernetes.Interface,
-	eventRecorder record.EventRecorder) *ClusterUpgradeStateManager {
+	k8sConfig *rest.Config,
+	eventRecorder record.EventRecorder,
+	podDeletionFilter PodDeletionFilter) (*ClusterUpgradeStateManager, error) {
+
+	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		return nil, fmt.Errorf("error creating k8s client: %v", err)
+	}
+
+	k8sInterface, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		return nil, fmt.Errorf("error creating k8s interface: %v", err)
+	}
+
+	nodeUpgradeStateProvider := NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+	drainManager := NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder)
+	podManager := NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, podDeletionFilter, eventRecorder)
+	cordonManager := NewCordonManager(k8sInterface, log)
+
 	manager := &ClusterUpgradeStateManager{
-		DrainManager:             drainManager,
-		PodManager:               podManager,
-		CordonManager:            cordonManager,
-		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
 		Log:                      log,
 		K8sClient:                k8sClient,
 		K8sInterface:             k8sInterface,
 		EventRecorder:            eventRecorder,
+		DrainManager:             drainManager,
+		PodManager:               podManager,
+		CordonManager:            cordonManager,
+		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
 	}
-	return manager
+	return manager, nil
+}
+
+func (m *ClusterUpgradeStateManager) BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error) {
+	m.Log.V(consts.LogLevelInfo).Info("Building state")
+
+	upgradeState := NewClusterUpgradeState()
+
+	daemonSets, err := m.getDriverDaemonSets(ctx, namespace, driverLabels)
+	if err != nil {
+		m.Log.V(consts.LogLevelError).Error(err, "Failed to get driver DaemonSet list")
+		return nil, err
+	}
+
+	m.Log.V(consts.LogLevelDebug).Info("Got driver DaemonSets", "length", len(daemonSets))
+
+	// Get list of driver pods
+	podList := &corev1.PodList{}
+
+	err = m.K8sClient.List(ctx, podList,
+		client.InNamespace(namespace),
+		client.MatchingLabels(driverLabels),
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	filteredPodList := []corev1.Pod{}
+	for _, ds := range daemonSets {
+		dsPods := m.getPodsOwnedbyDs(ds, podList.Items)
+		if int(ds.Status.DesiredNumberScheduled) != len(dsPods) {
+			m.Log.V(consts.LogLevelInfo).Info("Driver DaemonSet has Unscheduled pods", "name", ds.Name)
+			return nil, fmt.Errorf("Driver DaemonSet should not have Unscheduled pods")
+		}
+		filteredPodList = append(filteredPodList, dsPods...)
+	}
+
+	upgradeStateLabel := GetUpgradeStateLabelKey()
+
+	for i := range filteredPodList {
+		pod := &filteredPodList[i]
+		ownerDaemonSet := daemonSets[pod.OwnerReferences[0].UID]
+		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod)
+			return nil, err
+		}
+		nodeStateLabel := nodeState.Node.Labels[upgradeStateLabel]
+		upgradeState.NodeStates[nodeStateLabel] = append(
+			upgradeState.NodeStates[nodeStateLabel], nodeState)
+	}
+
+	return &upgradeState, nil
+}
+
+// buildNodeUpgradeState creates a mapping between a node,
+// the driver POD running on them and the daemon set, controlling this pod
+func (m *ClusterUpgradeStateManager) buildNodeUpgradeState(
+	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
+	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
+	}
+
+	upgradeStateLabel := GetUpgradeStateLabelKey()
+	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
+		"node", node.Name, "state", node.Labels[upgradeStateLabel])
+
+	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds}, nil
+}
+
+// getDriverDaemonSets retrieves DaemonSets with given labels and returns UID->DaemonSet map
+func (m *ClusterUpgradeStateManager) getDriverDaemonSets(ctx context.Context, namespace string, labels map[string]string) (map[types.UID]*appsv1.DaemonSet, error) {
+	// Get list of driver pods
+	daemonSetList := &appsv1.DaemonSetList{}
+
+	err := m.K8sClient.List(ctx, daemonSetList,
+		client.InNamespace(namespace),
+		client.MatchingLabels(labels))
+	if err != nil {
+		return nil, fmt.Errorf("error getting DaemonSet list: %v", err)
+	}
+
+	daemonSetMap := make(map[types.UID]*appsv1.DaemonSet)
+	for i := range daemonSetList.Items {
+		daemonSet := &daemonSetList.Items[i]
+		daemonSetMap[daemonSet.UID] = daemonSet
+	}
+
+	return daemonSetMap, nil
+}
+
+// getPodsOwnedbyDs returns a list of the pods owned by the specified DaemonSet
+func (m *ClusterUpgradeStateManager) getPodsOwnedbyDs(ds *appsv1.DaemonSet, pods []corev1.Pod) []corev1.Pod {
+	dsPodList := []corev1.Pod{}
+	for i := range pods {
+		pod := &pods[i]
+		if pod.OwnerReferences == nil || len(pod.OwnerReferences) < 1 {
+			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no owner DaemonSet", "pod", pod.Name)
+			continue
+		}
+		m.Log.V(consts.LogLevelInfo).Info("Pod", "pod", pod.Name, "owner", pod.OwnerReferences[0].Name)
+
+		if ds.UID != pod.OwnerReferences[0].UID {
+			m.Log.V(consts.LogLevelInfo).Info("Driver Pod is not owned by an Driver DaemonSet",
+				"pod", pod, "actual owner", pod.OwnerReferences[0])
+			continue
+		}
+		dsPodList = append(dsPodList, *pod)
+	}
+	return dsPodList
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -320,7 +446,7 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState, waitForCompletionSpec *v1alpha1.WaitForCompletionSpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessWaitForJobsRequiredNodes")
 
-	var nodes []*v1.Node
+	var nodes []*corev1.Node
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateWaitForJobsRequired] {
 		nodes = append(nodes, nodeState.Node)
 		if waitForCompletionSpec == nil || waitForCompletionSpec.PodSelector == "" {
@@ -356,7 +482,7 @@ func (m *ClusterUpgradeStateManager) ProcessPodDeletionRequiredNodes(
 
 	podManagerConfig := PodManagerConfig{
 		DeletionSpec: podDeletionSpec,
-		Nodes:        make([]*v1.Node, 0, len(currentClusterState.NodeStates[UpgradeStatePodDeletionRequired])),
+		Nodes:        make([]*corev1.Node, 0, len(currentClusterState.NodeStates[UpgradeStatePodDeletionRequired])),
 	}
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodDeletionRequired] {
@@ -403,7 +529,7 @@ func (m *ClusterUpgradeStateManager) ProcessDrainNodes(
 
 	drainConfig := DrainConfiguration{
 		Spec:  drainSpec,
-		Nodes: make([]*v1.Node, 0, len(currentClusterState.NodeStates[UpgradeStateDrainRequired])),
+		Nodes: make([]*corev1.Node, 0, len(currentClusterState.NodeStates[UpgradeStateDrainRequired])),
 	}
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateDrainRequired] {
 		drainConfig.Nodes = append(drainConfig.Nodes, nodeState.Node)
@@ -418,7 +544,7 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes")
 
-	pods := make([]*v1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
+	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
 		podTemplateGeneration, err := utils.GetPodTemplateGeneration(nodeState.DriverPod, m.Log)
 		if err != nil {
@@ -573,14 +699,14 @@ func (m *ClusterUpgradeStateManager) isDriverPodInSync(nodeState *NodeUpgradeSta
 }
 
 // skipNodeUpgrade returns true if node is labelled to skip driver upgrades
-func (m *ClusterUpgradeStateManager) skipNodeUpgrade(node *v1.Node) bool {
+func (m *ClusterUpgradeStateManager) skipNodeUpgrade(node *corev1.Node) bool {
 	if node.Labels[GetUpgradeSkipNodeLabelKey()] == "true" {
 		return true
 	}
 	return false
 }
 
-func isNodeUnschedulable(node *v1.Node) bool {
+func isNodeUnschedulable(node *corev1.Node) bool {
 	if node.Spec.Unschedulable {
 		return true
 	}
