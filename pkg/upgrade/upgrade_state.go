@@ -451,8 +451,13 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 		nodes = append(nodes, nodeState.Node)
 		if waitForCompletionSpec == nil || waitForCompletionSpec.PodSelector == "" {
 			// update node state to next state as no pod selector is specified for waiting
-			_ = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStatePodDeletionRequired)
-			m.Log.V(consts.LogLevelInfo).Info("Updated the node state", "node", nodeState.Node.Name, "state", UpgradeStatePodDeletionRequired)
+			m.Log.V(consts.LogLevelInfo).Info("No jobs to wait for as no pod selector was provided. Moving to next state.")
+			nextState := UpgradeStatePodDeletionRequired
+			if m.PodManager.GetPodDeletionFilter() == nil {
+				nextState = UpgradeStateDrainRequired
+			}
+			_ = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, nextState)
+			m.Log.V(consts.LogLevelInfo).Info("Updated the node state", "node", nodeState.Node.Name, "state", nextState)
 		}
 	}
 	// return if no pod selector is provided for waiting

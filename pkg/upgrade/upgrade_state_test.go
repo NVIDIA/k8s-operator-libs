@@ -221,6 +221,56 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateCount[upgrade.UpgradeStateCordonRequired] +
 			stateCount[upgrade.UpgradeStateWaitForJobsRequired]).To(Equal(4))
 	})
+	It("UpgradeStateManager should skip pod deletion if no filter is provided to PodManager at contruction", func() {
+		ctx := context.TODO()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateWaitForJobsRequired] = []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+		}
+
+		policyWithNoDrainSpec := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
+		for _, state := range clusterState.NodeStates[upgrade.UpgradeStateWaitForJobsRequired] {
+			Expect(getNodeUpgradeState(state.Node)).To(Equal(upgrade.UpgradeStateDrainRequired))
+		}
+	})
+	It("UpgradeStateManager should not skip pod deletion if a filter is provided to PodManager at contruction", func() {
+		ctx := context.TODO()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateWaitForJobsRequired] = []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateWaitForJobsRequired)},
+		}
+
+		policyWithNoDrainSpec := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		podManagerMock := mocks.PodManager{}
+		podManagerMock.
+			On("GetPodDeletionFilter").
+			Return(func() upgrade.PodDeletionFilter {
+				return func(pod corev1.Pod) bool { return false }
+			})
+		podManagerMock.
+			On("SchedulePodsRestart", mock.Anything, mock.Anything).
+			Return(nil)
+		stateManager.PodManager = &podManagerMock
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
+		for _, state := range clusterState.NodeStates[upgrade.UpgradeStateWaitForJobsRequired] {
+			Expect(getNodeUpgradeState(state.Node)).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
+		}
+
+	})
 	It("UpgradeStateManager should skip drain if it's disabled by policy", func() {
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] = []*upgrade.NodeUpgradeState{
