@@ -28,6 +28,22 @@ type PodManager struct {
 	mock.Mock
 }
 
+// GetPodDeletionFilter provides a mock function with given fields:
+func (_m *PodManager) GetPodDeletionFilter() upgrade.PodDeletionFilter {
+	ret := _m.Called()
+
+	var r0 upgrade.PodDeletionFilter
+	if rf, ok := ret.Get(0).(func() upgrade.PodDeletionFilter); ok {
+		r0 = rf()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(upgrade.PodDeletionFilter)
+		}
+	}
+
+	return r0
+}
+
 // ScheduleCheckOnPodCompletion provides a mock function with given fields: _a0, _a1
 func (_m *PodManager) ScheduleCheckOnPodCompletion(_a0 context.Context, _a1 *upgrade.PodManagerConfig) error {
 	ret := _m.Called(_a0, _a1)

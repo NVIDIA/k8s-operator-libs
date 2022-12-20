@@ -50,6 +50,7 @@ type PodManager interface {
 	ScheduleCheckOnPodCompletion(context.Context, *PodManagerConfig) error
 	SchedulePodsRestart(context.Context, []*v1.Pod) error
 	SchedulePodEviction(context.Context, *PodManagerConfig) error
+	GetPodDeletionFilter() PodDeletionFilter
 }
 
 // PodManagerConfig represent the selector for pods and Node names to be considered for managing those pods
@@ -61,6 +62,10 @@ type PodManagerConfig struct {
 
 // PodDeletionFilter takes a pod and returns a boolean indicating whether the pod should be deleted
 type PodDeletionFilter func(corev1.Pod) bool
+
+func (m *PodManagerImpl) GetPodDeletionFilter() PodDeletionFilter {
+	return m.podDeletionFilter
+}
 
 // SchedulePodEviction receives a config for pod eviction and deletes pods for each node in the list.
 // The set of pods to delete is determined by a filter that is provided to the PodManagerImpl during construction.

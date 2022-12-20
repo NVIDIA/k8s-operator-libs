@@ -139,6 +139,9 @@ var _ = BeforeSuite(func() {
 	podManager.
 		On("SchedulePodEviction", mock.Anything, mock.Anything).
 		Return(nil)
+	podManager.
+		On("GetPodDeletionFilter").
+		Return(nil)
 	cordonManager = mocks.CordonManager{}
 	cordonManager.
 		On("Cordon", mock.Anything, mock.Anything, mock.Anything).
