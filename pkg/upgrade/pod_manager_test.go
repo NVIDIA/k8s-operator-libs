@@ -218,8 +218,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
 			// verify annotation is removed to track the start time.
-			//Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
-			Expect(node.Annotations[upgrade.GetWaitForPodCompletionStartTimeAnnotationKey()]).To(Equal("null"))
+			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
 	})
 

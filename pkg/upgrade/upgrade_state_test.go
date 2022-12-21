@@ -36,10 +36,12 @@ import (
 
 var _ = Describe("UpgradeStateManager tests", func() {
 	var ctx context.Context
+	var id string
 	var stateManager *upgrade.ClusterUpgradeStateManager
 
 	BeforeEach(func() {
 		ctx = context.TODO()
+		id = randSeq(5)
 		// Create new ClusterUpgradeStateManager using mocked managers initialized in BeforeSuite()
 		var err error
 		stateManager, err = upgrade.NewClusterUpdateStateManager(log, k8sConfig, eventRecorder, nil)
@@ -95,13 +97,10 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		outdatedPod := &corev1.Pod{
 			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "1"}}}
 
-		UnknownToDoneNode := nodeWithUpgradeState("")
-		UnknownToUpgradeRequiredNode := nodeWithUpgradeState("")
-		DoneToDoneNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
-		DoneToUpgradeRequiredNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
-
-		UnknownToUpgradeRequiredNode.Spec.Unschedulable = true
-		DoneToUpgradeRequiredNode.Spec.Unschedulable = true
+		UnknownToDoneNode := NewNode(fmt.Sprintf("node1-%s", id)).Create()
+		UnknownToUpgradeRequiredNode := NewNode(fmt.Sprintf("node2-%s", id)).Unschedulable(true).Create()
+		DoneToDoneNode := NewNode(fmt.Sprintf("node3-%s", id)).WithUpgradeState(upgrade.UpgradeStateDone).Create()
+		DoneToUpgradeRequiredNode := NewNode(fmt.Sprintf("node4-%s", id)).WithUpgradeState(upgrade.UpgradeStateDone).Unschedulable(true).Create()
 
 		clusterState := upgrade.NewClusterUpgradeState()
 		unknownNodes := []*upgrade.NodeUpgradeState{
@@ -114,6 +113,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 		clusterState.NodeStates[""] = unknownNodes
 		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
+
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
 		Expect(getNodeUpgradeState(UnknownToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
@@ -492,6 +494,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
+
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateDone))
