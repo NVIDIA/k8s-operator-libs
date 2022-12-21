@@ -80,7 +80,7 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeState(
 		p.Log.V(consts.LogLevelError).Error(err, "Failed to patch node state label on a node object",
 			"node", node,
 			"state", newNodeState)
-		p.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node state label to %s, %s", newNodeState, err.Error())
+		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node state label to %s, %s", newNodeState, err.Error())
 		return err
 	}
 
@@ -114,12 +114,12 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeState(
 		p.Log.V(consts.LogLevelError).Error(err, "Error while waiting on node label update",
 			"node", node,
 			"state", newNodeState)
-		p.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node state label to %s, %s", newNodeState, err.Error())
+		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node state label to %s, %s", newNodeState, err.Error())
 	} else {
 		p.Log.V(consts.LogLevelInfo).Info("Successfully changed node upgrade state label",
 			"node", node.Name,
 			"new state", newNodeState)
-		p.eventRecorder.Eventf(node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node state label to %s", newNodeState)
+		logEventf(p.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node state label to %s", newNodeState)
 	}
 
 	return err
@@ -142,7 +142,7 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 			"node", node,
 			"annotationKey", key,
 			"annotationValue", value)
-		p.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node annotation %s=%s: %s", key, value, err.Error())
+		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node annotation %s=%s: %s", key, value, err.Error())
 		return err
 	}
 
@@ -177,13 +177,13 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 			"node", node,
 			"annotationKey", key,
 			"annotationValue", value)
-		p.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node annotation to %s=%s: %s", key, value, err.Error())
+		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to update node annotation to %s=%s: %s", key, value, err.Error())
 	} else {
 		p.Log.V(consts.LogLevelInfo).Info("Successfully changed node upgrade state annotation",
 			"node", node.Name,
 			"annotationKey", key,
 			"annotationValue", value)
-		p.eventRecorder.Eventf(node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node annotation to %s=%s", key, value)
+		logEventf(p.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node annotation to %s=%s", key, value)
 	}
 
 	return err
