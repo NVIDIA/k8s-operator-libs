@@ -100,9 +100,14 @@ func GetUpgradeSkipDrainPodLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipDrainPodLabelKeyFmt, DriverName)
 }
 
-// GetUpgradeInitialStateAnnotationKey returns state label key used for upgrades
+// GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
 func GetUpgradeInitialStateAnnotationKey() string {
 	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)
+}
+
+// GetWaitForPodCompletionStartTimeAnnotationKey returns the key for annotation used to track start time for waiting on pod/job completions
+func GetWaitForPodCompletionStartTimeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt, DriverName)
 }
 
 // GetEventReason returns the reason type based on the driver name

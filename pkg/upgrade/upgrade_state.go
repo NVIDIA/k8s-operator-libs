@@ -470,7 +470,7 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 		return nil
 	}
 
-	podManagerConfig := PodManagerConfig{Selector: waitForCompletionSpec.PodSelector, Nodes: nodes}
+	podManagerConfig := PodManagerConfig{WaitForCompletionSpec: waitForCompletionSpec, Nodes: nodes}
 	err := m.PodManager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 	if err != nil {
 		return err

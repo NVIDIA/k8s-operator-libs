@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,8 +52,11 @@ var _ = Describe("PodManager", func() {
 		namespace = createNamespace(fmt.Sprintf("namespace-%s", id))
 		// default PodManagerConfig
 		podManagerConfig = upgrade.PodManagerConfig{
-			Selector: "",
-			Nodes:    []*corev1.Node{node},
+			WaitForCompletionSpec: &v1alpha1.WaitForCompletionSpec{
+				PodSelector:   "",
+				TimeoutSecond: 0,
+			},
+			Nodes: []*corev1.Node{node},
 			DeletionSpec: &v1alpha1.PodDeletionSpec{
 				Force:          false,
 				TimeoutSecond:  300,
@@ -135,7 +139,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(podList.Items).NotTo(BeEmpty())
 
-			podManagerConfig.Selector = "app=my-app"
+			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
 			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
 			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
@@ -161,7 +165,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(podList.Items).NotTo(BeEmpty())
 
-			podManagerConfig.Selector = "app=my-app"
+			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
 			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
 			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
@@ -170,6 +174,52 @@ var _ = Describe("PodManager", func() {
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateWaitForJobsRequired))
+		})
+		It("should change the state of the node if workload pod is running and timeout is reached", func() {
+			// initialize upgrade state of the node
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateWaitForJobsRequired)
+			Expect(err).To(Succeed())
+
+			// create pod to be running on testnode
+			labels := map[string]string{"app": "my-app"}
+			_ = NewPod("test-pod", namespace.Name, node.Name).WithLabels(labels).Create()
+
+			// get pod scheduled for the job
+			listOptions := metav1.ListOptions{LabelSelector: "app=my-app", FieldSelector: "spec.nodeName=" + node.Name}
+			podList, err := k8sInterface.CoreV1().Pods("").List(ctx, listOptions)
+			Expect(err).To(Succeed())
+			Expect(podList.Items).NotTo(BeEmpty())
+
+			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
+			podManagerConfig.WaitForCompletionSpec.TimeoutSecond = 30
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
+			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// verify upgrade state is unchanged with workload pod running
+			node, err = provider.GetNode(ctx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateWaitForJobsRequired))
+
+			// verify annotation is added track the start time.
+			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(true))
+
+			startTime := strconv.FormatInt(time.Now().Unix()-35, 10)
+			provider.ChangeNodeUpgradeAnnotation(ctx, node, upgrade.GetWaitForPodCompletionStartTimeAnnotationKey(), startTime)
+
+			podManagerConfig.Nodes = []*corev1.Node{node}
+
+			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// verify upgrade state is unchanged with workload pod running
+			node, err = provider.GetNode(ctx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
+			// verify annotation is removed to track the start time.
+			//Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
+			Expect(node.Annotations[upgrade.GetWaitForPodCompletionStartTimeAnnotationKey()]).To(Equal("null"))
 		})
 	})
 

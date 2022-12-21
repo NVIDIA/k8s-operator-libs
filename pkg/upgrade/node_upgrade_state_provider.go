@@ -183,7 +183,7 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 			"node", node.Name,
 			"annotationKey", key,
 			"annotationValue", value)
-		p.eventRecorder.Eventf(node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node annotation to %s=%s: %s", key, value, err.Error())
+		p.eventRecorder.Eventf(node, corev1.EventTypeNormal, GetEventReason(), "Successfully updated node annotation to %s=%s", key, value)
 	}
 
 	return err
