@@ -102,7 +102,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 		node := node
 		if !m.drainingNodes.Has(node.Name) {
 			m.log.V(consts.LogLevelInfo).Info("Schedule drain for node", "node", node.Name)
-			m.eventRecorder.Event(node, corev1.EventTypeNormal, GetEventReason(), "Scheduling drain of the node")
+			logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Scheduling drain of the node")
 
 			m.drainingNodes.Add(node.Name)
 			go func() {
@@ -111,7 +111,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to cordon node", "node", node.Name)
 					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
-					m.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to cordon the node, %s", err.Error())
+					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to cordon the node, %s", err.Error())
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Cordoned the node", "node", node.Name)
@@ -120,11 +120,11 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to drain node", "node", node.Name)
 					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
-					m.eventRecorder.Eventf(node, corev1.EventTypeWarning, GetEventReason(), "Failed to drain the node, %s", err.Error())
+					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(), "Failed to drain the node, %s", err.Error())
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Drained the node", "node", node.Name)
-				m.eventRecorder.Eventf(node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
+				logEventf(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
 
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStatePodRestartRequired)
 			}()

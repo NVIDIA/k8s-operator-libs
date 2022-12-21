@@ -15,6 +15,8 @@ package upgrade
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"strings"
 	"sync"
 )
@@ -113,4 +115,16 @@ func GetWaitForPodCompletionStartTimeAnnotationKey() string {
 // GetEventReason returns the reason type based on the driver name
 func GetEventReason() string {
 	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
+}
+
+func logEventf(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string, args ...interface{}) {
+	if recorder != nil {
+		recorder.Eventf(object, eventType, reason, messageFmt, args)
+	}
+}
+
+func logEvent(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string) {
+	if recorder != nil {
+		recorder.Event(object, eventType, reason, messageFmt)
+	}
 }

@@ -161,13 +161,13 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to delete pods on the node", "node", node.Name)
 					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateFailed)
-					m.eventRecorder.Eventf(&node, corev1.EventTypeWarning, GetEventReason(), "Failed to delete workload pods on the node for the driver upgrade, %s", err.Error())
+					logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(), "Failed to delete workload pods on the node for the driver upgrade, %s", err.Error())
 					return
 				}
 
 				m.log.V(consts.LogLevelInfo).Info("Deleted pods on the node", "node", node.Name)
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateDrainRequired)
-				m.eventRecorder.Event(&node, corev1.EventTypeNormal, GetEventReason(), "Deleted workload pods on the node for the driver upgrade")
+				logEvent(m.eventRecorder, &node, corev1.EventTypeNormal, GetEventReason(), "Deleted workload pods on the node for the driver upgrade")
 			}(*node)
 		} else {
 			m.log.V(consts.LogLevelInfo).Info("Node is already getting pods deleted, skipping", "node", node.Name)
@@ -190,7 +190,7 @@ func (m *PodManagerImpl) SchedulePodsRestart(ctx context.Context, pods []*corev1
 		err := m.k8sInterface.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOptions)
 		if err != nil {
 			m.log.V(consts.LogLevelInfo).Error(err, "Failed to delete pod", "pod", pod.Name)
-			m.eventRecorder.Eventf(pod, corev1.EventTypeWarning, GetEventReason(), "Failed to restart driver pod %s", err.Error())
+			logEventf(m.eventRecorder, pod, corev1.EventTypeWarning, GetEventReason(), "Failed to restart driver pod %s", err.Error())
 			return err
 		}
 	}
@@ -235,7 +235,7 @@ func (m *PodManagerImpl) ScheduleCheckOnPodCompletion(ctx context.Context, confi
 				if config.WaitForCompletionSpec.TimeoutSecond != 0 {
 					err = m.HandleTimeoutOnPodCompletions(ctx, &node, int64(config.WaitForCompletionSpec.TimeoutSecond))
 					if err != nil {
-						m.eventRecorder.Eventf(&node, corev1.EventTypeWarning, GetEventReason(), "Failed to handle timeout for job completions, %s", err.Error())
+						logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(), "Failed to handle timeout for job completions, %s", err.Error())
 						return
 					}
 				}
