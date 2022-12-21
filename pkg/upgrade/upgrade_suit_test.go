@@ -256,7 +256,7 @@ func (p Pod) WithLabels(labels map[string]string) Pod {
 
 func (p Pod) WithEmptyDir() Pod {
 	p.Spec.Volumes = []corev1.Volume{
-		corev1.Volume{
+		{
 			Name: "volume",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
@@ -405,6 +405,11 @@ func getNodeUpgradeState(node *corev1.Node) string {
 
 func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
 	_, ok := node.Annotations[upgrade.GetUpgradeInitialStateAnnotationKey()]
+	return ok
+}
+
+func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[upgrade.GetWaitForPodCompletionStartTimeAnnotationKey()]
 	return ok
 }
 

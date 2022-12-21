@@ -27,7 +27,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/k8s-operator-libs/api"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
@@ -339,7 +339,7 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 		return nil
 	}
 
-	podManagerConfig := PodManagerConfig{Selector: waitForCompletionSpec.PodSelector, Nodes: nodes}
+	podManagerConfig := PodManagerConfig{WaitForCompletionSpec: waitForCompletionSpec, Nodes: nodes}
 	err := m.PodManager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 	if err != nil {
 		return err
