@@ -18,18 +18,26 @@ package upgrade_test
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("NodeUpgradeStateProvider tests", func() {
-	It("NodeUpgradeStateProvider should change node upgrade state and retrieve the latest node object", func() {
-		ctx := context.TODO()
-		node := createNode("test-node")
+	var ctx context.Context
+	var id string
+	var node *corev1.Node
 
+	BeforeEach(func() {
+		ctx = context.TODO()
+		id = randSeq(5)
+		node = createNode(fmt.Sprintf("node-%s", id))
+	})
+	It("NodeUpgradeStateProvider should change node upgrade state and retrieve the latest node object", func() {
 		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 
 		err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateUpgradeRequired)
@@ -38,5 +46,28 @@ var _ = Describe("NodeUpgradeStateProvider tests", func() {
 		node, err = provider.GetNode(ctx, node.Name)
 		Expect(err).To(Succeed())
 		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+	})
+	It("NodeUpgradeStateProvider should change node upgrade annotation and retrieve the latest node object", func() {
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+
+		key := upgrade.GetUpgradeInitialStateAnnotationKey()
+		err := provider.ChangeNodeUpgradeAnnotation(ctx, node, key, "true")
+		Expect(err).To(Succeed())
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(node.Annotations[key]).To(Equal("true"))
+	})
+	It("NodeUpgradeStateProvider should delete node upgrade annotation and retrieve the latest node object", func() {
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+
+		key := upgrade.GetUpgradeInitialStateAnnotationKey()
+		err := provider.ChangeNodeUpgradeAnnotation(ctx, node, key, "null")
+		Expect(err).To(Succeed())
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		_, exist := node.Annotations[key]
+		Expect(exist).To(Equal(false))
 	})
 })

@@ -135,7 +135,10 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 	defer p.nodeMutex.Lock(node.Name)()
 
 	patchString := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q: %q}}}`, key, value))
-	patch := client.RawPatch(types.StrategicMergePatchType, patchString)
+	if value == "null" {
+		patchString = []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q: null}}}`, key))
+	}
+	patch := client.RawPatch(types.MergePatchType, patchString)
 	err := p.K8sClient.Patch(ctx, node, patch)
 	if err != nil {
 		p.Log.V(consts.LogLevelError).Error(err, "Failed to patch node state annotation on a node object",
@@ -163,7 +166,16 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 		if err != nil {
 			return false, err
 		}
-		annotationValue := node.Annotations[key]
+		annotationValue, exists := node.Annotations[key]
+		if value == "null" {
+			// annotation key should be removed
+			if exists {
+				p.Log.V(consts.LogLevelDebug).Info("upgrade state annotation for node should be removed but it still exists",
+					"node", node.Name, "annotationKey", key)
+				return false, nil
+			}
+			return true, nil
+		}
 		if annotationValue != value {
 			p.Log.V(consts.LogLevelDebug).Info("upgrade state annotation for node doesn't match the expected",
 				"node", node.Name, "annotationKey", key, "expected", value, "actual", annotationValue)
