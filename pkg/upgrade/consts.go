@@ -42,8 +42,10 @@ const (
 	// either to UpgradeStatePodRestartRequired or UpgradeStateFailed
 	UpgradeStateDrainRequired = "drain-required"
 	// UpgradeStatePodRestartRequired is set when the driver pod on the node is scheduled for restart.
-	// After the restart state is changed to UpgradeStateDone
 	UpgradeStatePodRestartRequired = "pod-restart-required"
+	// UpgradeStateValidationRequired is set when validation of the new driver deployed on the node is
+	// required before moving to UpgradeStateUncordonRequired.
+	UpgradeStateValidationRequired = "validation-required"
 	// UpgradeStateUncordonRequired is set when driver pod on the node is up-to-date and has "Ready" status
 	UpgradeStateUncordonRequired = "uncordon-required"
 	// UpgradeStateDone is set when driver pod is up to date and running on the node, the node is schedulable

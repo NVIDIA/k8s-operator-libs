@@ -68,14 +68,18 @@ type ClusterUpgradeStateManager struct {
 	PodManager               PodManager
 	CordonManager            CordonManager
 	NodeUpgradeStateProvider NodeUpgradeStateProvider
+	ValidationManager        ValidationManager
+
+	// optional states
+	podDeletionStateEnabled bool
+	validationStateEnabled  bool
 }
 
-// NewClusterUpdateStateManager creates a new instance of ClusterUpgradeStateManager
-func NewClusterUpdateStateManager(
+// NewClusterUpgradeStateManager creates a new instance of ClusterUpgradeStateManager
+func NewClusterUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
-	eventRecorder record.EventRecorder,
-	podDeletionFilter PodDeletionFilter) (*ClusterUpgradeStateManager, error) {
+	eventRecorder record.EventRecorder) (*ClusterUpgradeStateManager, error) {
 
 	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
@@ -88,21 +92,48 @@ func NewClusterUpdateStateManager(
 	}
 
 	nodeUpgradeStateProvider := NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-	drainManager := NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder)
-	podManager := NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, podDeletionFilter, eventRecorder)
-	cordonManager := NewCordonManager(k8sInterface, log)
-
 	manager := &ClusterUpgradeStateManager{
 		Log:                      log,
 		K8sClient:                k8sClient,
 		K8sInterface:             k8sInterface,
 		EventRecorder:            eventRecorder,
-		DrainManager:             drainManager,
-		PodManager:               podManager,
-		CordonManager:            cordonManager,
+		DrainManager:             NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder),
+		PodManager:               NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, nil, eventRecorder),
+		CordonManager:            NewCordonManager(k8sInterface, log),
 		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
+		ValidationManager:        NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
 	}
 	return manager, nil
+}
+
+// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom PodDeletionFilter to use
+func (m *ClusterUpgradeStateManager) WithPodDeletionEnabled(filter PodDeletionFilter) *ClusterUpgradeStateManager {
+	if filter == nil {
+		m.Log.V(consts.LogLevelWarning).Info("Cannot enable PodDeletion state as PodDeletionFilter is nil")
+		return m
+	}
+	m.PodManager = NewPodManager(m.K8sInterface, m.NodeUpgradeStateProvider, m.Log, filter, m.EventRecorder)
+	m.podDeletionStateEnabled = true
+	return m
+}
+
+// WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify which pods are performing the validation
+func (m *ClusterUpgradeStateManager) WithValidationEnabled(podSelector string) *ClusterUpgradeStateManager {
+	if podSelector == "" {
+		m.Log.V(consts.LogLevelWarning).Info("Cannot enable Validation state as podSelector is empty")
+		return m
+	}
+	m.ValidationManager = NewValidationManager(m.K8sInterface, m.Log, m.EventRecorder, m.NodeUpgradeStateProvider, podSelector)
+	m.validationStateEnabled = true
+	return m
+}
+
+func (m *ClusterUpgradeStateManager) IsPodDeletionEnabled() bool {
+	return m.podDeletionStateEnabled
+}
+
+func (m *ClusterUpgradeStateManager) IsValidationEnabled() bool {
+	return m.validationStateEnabled
 }
 
 func (m *ClusterUpgradeStateManager) BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error) {
@@ -244,6 +275,7 @@ func (m *ClusterUpgradeStateManager) ApplyState(ctx context.Context,
 		UpgradeStateFailed, len(currentState.NodeStates[UpgradeStateFailed]),
 		UpgradeStateDrainRequired, len(currentState.NodeStates[UpgradeStateDrainRequired]),
 		UpgradeStatePodRestartRequired, len(currentState.NodeStates[UpgradeStatePodRestartRequired]),
+		UpgradeStateValidationRequired, len(currentState.NodeStates[UpgradeStateValidationRequired]),
 		UpgradeStateUncordonRequired, len(currentState.NodeStates[UpgradeStateUncordonRequired]))
 
 	upgradesInProgress := len(currentState.NodeStates[UpgradeStateCordonRequired]) +
@@ -251,6 +283,7 @@ func (m *ClusterUpgradeStateManager) ApplyState(ctx context.Context,
 		len(currentState.NodeStates[UpgradeStatePodRestartRequired]) +
 		len(currentState.NodeStates[UpgradeStateWaitForJobsRequired]) +
 		len(currentState.NodeStates[UpgradeStatePodDeletionRequired]) +
+		len(currentState.NodeStates[UpgradeStateValidationRequired]) +
 		len(currentState.NodeStates[UpgradeStateFailed]) +
 		len(currentState.NodeStates[UpgradeStateUncordonRequired])
 
@@ -320,7 +353,12 @@ func (m *ClusterUpgradeStateManager) ApplyState(ctx context.Context,
 	}
 	err = m.ProcessUpgradeFailedNodes(ctx, currentState)
 	if err != nil {
-		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes which failed to drain")
+		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes in 'upgrade-failed' state")
+		return err
+	}
+	err = m.ProcessValidationRequiredNodes(ctx, currentState)
+	if err != nil {
+		m.Log.V(consts.LogLevelError).Error(err, "Failed to validate driver upgrade")
 		return err
 	}
 	err = m.ProcessUncordonRequiredNodes(ctx, currentState)
@@ -453,7 +491,7 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 			// update node state to next state as no pod selector is specified for waiting
 			m.Log.V(consts.LogLevelInfo).Info("No jobs to wait for as no pod selector was provided. Moving to next state.")
 			nextState := UpgradeStatePodDeletionRequired
-			if m.PodManager.GetPodDeletionFilter() == nil {
+			if !m.IsPodDeletionEnabled() {
 				nextState = UpgradeStateDrainRequired
 			}
 			_ = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, nextState)
@@ -572,32 +610,19 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 				return err
 			}
 			if driverPodInSync {
-				newUpgradeState := UpgradeStateUncordonRequired
-				// If node was Unschedulable at beginning of upgrade, skip the
-				// uncordon state so that node remains in the same state as
-				// when the upgrade started.
-				annotationKey := GetUpgradeInitialStateAnnotationKey()
-				if _, ok := nodeState.Node.Annotations[annotationKey]; ok {
-					m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
-						"node", nodeState.Node.Name)
-					newUpgradeState = UpgradeStateDone
-				}
-
-				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(
-					ctx, nodeState.Node, newUpgradeState)
-				if err != nil {
-					m.Log.V(consts.LogLevelError).Error(
-						err, "Failed to change node upgrade state", "state", newUpgradeState)
-					return err
-				}
-
-				if newUpgradeState == UpgradeStateDone {
-					m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
-						"node", nodeState.Node.Name, "annotation", annotationKey)
-					err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, "null")
+				if !m.IsValidationEnabled() {
+					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState.Node)
 					if err != nil {
 						return err
 					}
+					continue
+				}
+
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateValidationRequired)
+				if err != nil {
+					m.Log.V(consts.LogLevelError).Error(
+						err, "Failed to change node upgrade state", "state", UpgradeStateValidationRequired)
+					return err
 				}
 			}
 		}
@@ -650,6 +675,32 @@ func (m *ClusterUpgradeStateManager) ProcessUpgradeFailedNodes(
 		}
 	}
 
+	return nil
+}
+
+// ProcessValidationRequiredNodes
+func (m *ClusterUpgradeStateManager) ProcessValidationRequiredNodes(
+	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
+	m.Log.V(consts.LogLevelInfo).Info("ProcessValidationRequiredNodes")
+
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateValidationRequired] {
+		node := nodeState.Node
+		validationDone, err := m.ValidationManager.Validate(ctx, node)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(err, "Failed to validate driver upgrade", "node", node.Name)
+			return err
+		}
+
+		if !validationDone {
+			m.Log.V(consts.LogLevelInfo).Info("Validations not complete on the node", "node", node.Name)
+			continue
+		}
+
+		err = m.updateNodeToUncordonOrDoneState(ctx, node)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -709,6 +760,36 @@ func (m *ClusterUpgradeStateManager) skipNodeUpgrade(node *corev1.Node) bool {
 		return true
 	}
 	return false
+}
+
+// updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
+// was Unschedulable at the beginning of the upgrade so that the node remains in the same state as
+// when the ugprade started. In addition, the annotation tracking this information is removed.
+func (m *ClusterUpgradeStateManager) updateNodeToUncordonOrDoneState(ctx context.Context, node *corev1.Node) error {
+	newUpgradeState := UpgradeStateUncordonRequired
+	annotationKey := GetUpgradeInitialStateAnnotationKey()
+	if _, ok := node.Annotations[annotationKey]; ok {
+		m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
+			"node", node.Name)
+		newUpgradeState = UpgradeStateDone
+	}
+
+	err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
+	if err != nil {
+		m.Log.V(consts.LogLevelError).Error(
+			err, "Failed to change node upgrade state", "node", node.Name, "state", newUpgradeState)
+		return err
+	}
+
+	if newUpgradeState == UpgradeStateDone {
+		m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
+			"node", node.Name, "annotation", annotationKey)
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, "null")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isNodeUnschedulable(node *corev1.Node) bool {

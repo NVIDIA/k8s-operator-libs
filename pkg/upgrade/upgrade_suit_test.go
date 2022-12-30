@@ -59,6 +59,7 @@ var nodeUpgradeStateProvider mocks.NodeUpgradeStateProvider
 var drainManager mocks.DrainManager
 var podManager mocks.PodManager
 var cordonManager mocks.CordonManager
+var validationManager mocks.ValidationManager
 var eventRecorder = record.NewFakeRecorder(100)
 
 var createdObjects []client.Object
@@ -149,6 +150,10 @@ var _ = BeforeSuite(func() {
 	cordonManager.
 		On("Uncordon", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil)
+	validationManager = mocks.ValidationManager{}
+	validationManager.
+		On("Validate", mock.Anything, mock.Anything).
+		Return(true, nil)
 }, 60)
 
 var _ = AfterSuite(func() {

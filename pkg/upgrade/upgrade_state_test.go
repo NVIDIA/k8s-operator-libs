@@ -44,12 +44,14 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		id = randSeq(5)
 		// Create new ClusterUpgradeStateManager using mocked managers initialized in BeforeSuite()
 		var err error
-		stateManager, err = upgrade.NewClusterUpdateStateManager(log, k8sConfig, eventRecorder, nil)
+		stateManager, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig, eventRecorder)
 		Expect(err).NotTo(HaveOccurred())
 		stateManager.NodeUpgradeStateProvider = &nodeUpgradeStateProvider
 		stateManager.DrainManager = &drainManager
 		stateManager.CordonManager = &cordonManager
 		stateManager.PodManager = &podManager
+		stateManager.ValidationManager = &validationManager
+
 	})
 
 	It("UpgradeStateManager should fail on nil currentState", func() {
@@ -256,16 +258,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		podManagerMock := mocks.PodManager{}
-		podManagerMock.
-			On("GetPodDeletionFilter").
-			Return(func() upgrade.PodDeletionFilter {
-				return func(pod corev1.Pod) bool { return false }
-			})
-		podManagerMock.
-			On("SchedulePodsRestart", mock.Anything, mock.Anything).
-			Return(nil)
-		stateManager.PodManager = &podManagerMock
+		filter := func(pod corev1.Pod) bool { return false }
+		stateManager = stateManager.WithPodDeletionEnabled(filter)
+		Expect(stateManager.IsPodDeletionEnabled()).To(Equal(true))
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
 		for _, state := range clusterState.NodeStates[upgrade.UpgradeStateWaitForJobsRequired] {
@@ -504,6 +499,118 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		// unschedulable annotation should be removed
 		Expect(isUnschedulableAnnotationPresent(podRestartNode)).To(Equal(false))
 		Expect(isUnschedulableAnnotationPresent(upgradeFailedNode)).To(Equal(false))
+	})
+	It("UpgradeStateManager should move pod to UpgradeValidationRequired state "+
+		"if it's in PodRestart, driver pod is up-to-date and ready, and validation is enabled", func() {
+		ctx := context.TODO()
+
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		pod := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase:             "Running",
+				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+			},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+		podRestartNode := NewNode(fmt.Sprintf("node1-%s", id)).
+			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
+			Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            podRestartNode,
+				DriverPod:       pod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		stateManager = stateManager.WithValidationEnabled("app=validator")
+		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
+		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateValidationRequired))
+	})
+	It("UpgradeStateManager should move pod to UpgradeUncordonRequired state "+
+		"if it's in ValidationRequired and validation has completed", func() {
+		ctx := context.TODO()
+
+		node := NewNode(fmt.Sprintf("node1-%s", id)).
+			WithUpgradeState(upgrade.UpgradeStateValidationRequired).
+			Create()
+
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id))
+		_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateValidationRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            node,
+				DriverPod:       &corev1.Pod{},
+				DriverDaemonSet: &appsv1.DaemonSet{},
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		stateManager = stateManager.WithValidationEnabled("app=validator")
+		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
+		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+	})
+	It("UpgradeStateManager should move pod to UpgradeDone state"+
+		"if it's in ValidationRequired, validation has completed, and node was initially Unschedulable", func() {
+		ctx := context.TODO()
+
+		node := NewNode(fmt.Sprintf("node1-%s", id)).
+			WithUpgradeState(upgrade.UpgradeStateValidationRequired).
+			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
+			Unschedulable(true).
+			Create()
+
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id))
+		_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateValidationRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            node,
+				DriverPod:       &corev1.Pod{},
+				DriverDaemonSet: &appsv1.DaemonSet{},
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		stateManager = stateManager.WithValidationEnabled("app=validator")
+		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
+		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateDone))
+		// unschedulable annotation should be removed
+		Expect(isUnschedulableAnnotationPresent(node)).To(Equal(false))
+
 	})
 	It("UpgradeStateManager should uncordon UncordonRequired pod and finish upgrade", func() {
 		node := nodeWithUpgradeState(upgrade.UpgradeStateUncordonRequired)
