@@ -20,13 +20,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubectl/pkg/drain"
@@ -47,10 +51,12 @@ type PodManagerImpl struct {
 
 // PodManager is an interface that allows to wait on certain pod statuses
 type PodManager interface {
-	ScheduleCheckOnPodCompletion(context.Context, *PodManagerConfig) error
-	SchedulePodsRestart(context.Context, []*corev1.Pod) error
-	SchedulePodEviction(context.Context, *PodManagerConfig) error
+	ScheduleCheckOnPodCompletion(ctx context.Context, config *PodManagerConfig) error
+	SchedulePodsRestart(ctx context.Context, pods []*corev1.Pod) error
+	SchedulePodEviction(ctx context.Context, config *PodManagerConfig) error
 	GetPodDeletionFilter() PodDeletionFilter
+	GetPodControllerRevisionHash(ctx context.Context, pod *corev1.Pod) (string, error)
+	GetDaemonsetControllerRevisionHash(ctx context.Context, daemonset *appsv1.DaemonSet) (string, error)
 }
 
 // PodManagerConfig represent the selector for pods and Node names to be considered for managing those pods
@@ -60,11 +66,54 @@ type PodManagerConfig struct {
 	WaitForCompletionSpec *v1alpha1.WaitForCompletionSpec
 }
 
+const (
+	PodControllerRevisionHashLabelKey = "controller-revision-hash"
+)
+
 // PodDeletionFilter takes a pod and returns a boolean indicating whether the pod should be deleted
 type PodDeletionFilter func(corev1.Pod) bool
 
 func (m *PodManagerImpl) GetPodDeletionFilter() PodDeletionFilter {
 	return m.podDeletionFilter
+}
+
+func (m *PodManagerImpl) GetPodControllerRevisionHash(ctx context.Context, pod *corev1.Pod) (string, error) {
+	if hash, ok := pod.Labels[PodControllerRevisionHashLabelKey]; ok {
+		return hash, nil
+	}
+	return "", fmt.Errorf("controller-revision-hash label not present for pod %s", pod.Name)
+}
+
+func (m *PodManagerImpl) GetDaemonsetControllerRevisionHash(ctx context.Context, daemonset *appsv1.DaemonSet) (string, error) {
+	hash := ""
+	controllerRevisionList := &appsv1.ControllerRevisionList{}
+
+	// get all revisions for the daemonset
+	listOptions := meta_v1.ListOptions{LabelSelector: labels.SelectorFromSet(daemonset.Spec.Selector.MatchLabels).String()}
+	controllerRevisionList, err := m.k8sInterface.AppsV1().ControllerRevisions(daemonset.Namespace).List(ctx, listOptions)
+	if err != nil {
+		return "", fmt.Errorf("error getting controller revision list for daemonset %s: %v", daemonset.Name, err)
+	}
+
+	var revisions = make([]int64, len(controllerRevisionList.Items))
+	for i, controllerRevision := range controllerRevisionList.Items {
+		revisions[i] = controllerRevision.Revision
+	}
+
+	// sort the revision list to make sure we obtain latest revision always
+	sort.Slice(revisions, func(i, j int) bool { return revisions[i] < revisions[j] })
+
+	currentRevision := revisions[len(revisions)-1]
+	for _, controllerRevision := range controllerRevisionList.Items {
+		if controllerRevision.Revision != currentRevision {
+			continue
+		}
+		// trim the daemonset name: nvidia-driver-daemonset-5698dd78cf
+		re := regexp.MustCompile(".*-")
+		hash = re.ReplaceAllString(controllerRevision.Name, "")
+		break
+	}
+	return hash, nil
 }
 
 // SchedulePodEviction receives a config for pod eviction and deletes pods for each node in the list.

@@ -31,7 +31,6 @@ import (
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
 
 var _ = Describe("UpgradeStateManager tests", func() {
@@ -59,11 +58,11 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateManager.ApplyState(ctx, &upgrade.ClusterUpgradeState{}, nil)).To(Succeed())
 	})
 	It("UpgradeStateManager should move up-to-date nodes to Done and outdated nodes to UpgradeRequired states", func() {
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 2}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		upToDatePod := &corev1.Pod{
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "2"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		outdatedPod := &corev1.Pod{
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "1"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outadated"}}}
 
 		UnknownToDoneNode := nodeWithUpgradeState("")
 		UnknownToUpgradeRequiredNode := nodeWithUpgradeState("")
@@ -91,11 +90,11 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	It("UpgradeStateManager should move outdated nodes to UpgradeRequired state and annotate node if unschedulable", func() {
 		ctx := context.TODO()
 
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 2}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		upToDatePod := &corev1.Pod{
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "2"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		outdatedPod := &corev1.Pod{
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "1"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
 
 		UnknownToDoneNode := NewNode(fmt.Sprintf("node1-%s", id)).Create()
 		UnknownToUpgradeRequiredNode := NewNode(fmt.Sprintf("node2-%s", id)).Unschedulable(true).Create()
@@ -370,15 +369,15 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).ToNot(Succeed())
 	})
 	It("UpgradeStateManager should not restart pod if it's up to date or already terminating", func() {
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		upToDatePod := &corev1.Pod{
 			Status:     corev1.PodStatus{Phase: "Running"},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		outdatedRunningPod := &corev1.Pod{
 			Status:     corev1.PodStatus{Phase: "Running"},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "2"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
 		outdatedTerminatingPod := &corev1.Pod{
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "1"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
 		now := v1.Now()
 		outdatedTerminatingPod.ObjectMeta.DeletionTimestamp = &now
 
@@ -413,19 +412,32 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				Expect(podsToDelete[0]).To(Equal(outdatedRunningPod))
 				return nil
 			})
+		podManagerMock.
+			On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
+			Return(
+				func(ctx context.Context, pod *corev1.Pod) string {
+					return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
+				},
+				func(ctx context.Context, pod *corev1.Pod) error {
+					return nil
+				},
+			)
+		podManagerMock.
+			On("GetDaemonsetControllerRevisionHash", mock.Anything, mock.Anything, mock.Anything).
+			Return("test-hash-12345", nil)
 		stateManager.PodManager = &podManagerMock
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 	})
 	It("UpgradeStateManager should move pod to UncordonRequired state "+
 		"if it's in PodRestart or UpgradeFailed, up to date and ready", func() {
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		pod := &corev1.Pod{
 			Status: corev1.PodStatus{
 				Phase:             "Running",
 				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
 			},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		podRestartNode := NewNode("pod-restart-node").WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).Create()
 		upgradeFailedNode := NewNode("upgrade-failed-node").WithUpgradeState(upgrade.UpgradeStateFailed).Create()
 
@@ -457,13 +469,13 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		"if it's in PodRestart or UpgradeFailed, driver pod is up-to-date and ready, and node was initially Unschedulable", func() {
 		ctx := context.TODO()
 
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		pod := &corev1.Pod{
 			Status: corev1.PodStatus{
 				Phase:             "Running",
 				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
 			},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		podRestartNode := NewNode("pod-restart-node-unschedulable").
 			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
 			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
