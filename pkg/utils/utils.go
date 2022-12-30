@@ -20,20 +20,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	"github.com/go-logr/logr"
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-
-	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
-
-const PodTemplateGenerationLabel = "pod-template-generation"
 
 // GetFilesWithSuffix returns all files under a given base directory that have a specific suffix
 // The operation is performed recurively on sub directories as well
@@ -81,13 +74,4 @@ func CreateK8sInterface() (kubernetes.Interface, error) {
 	}
 
 	return k8sInterface, nil
-}
-
-func GetPodTemplateGeneration(pod *v1.Pod, log logr.Logger) (int64, error) {
-	generation, err := strconv.ParseInt(pod.Labels[PodTemplateGenerationLabel], 10, 0)
-	if err != nil {
-		log.V(consts.LogLevelInfo).Error(err, "Failed to get pod template generation", "pod", pod)
-		return 0, err
-	}
-	return generation, nil
 }

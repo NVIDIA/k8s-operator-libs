@@ -32,7 +32,6 @@ import (
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/utils"
 )
 
 // NodeUpgradeState contains a mapping between a node,
@@ -377,13 +376,21 @@ func (m *ClusterUpgradeStateManager) ProcessDoneOrUnknownNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessDoneOrUnknownNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[nodeStateName] {
-		podTemplateGeneration, err := utils.GetPodTemplateGeneration(nodeState.DriverPod, m.Log)
+		podRevisionHash, err := m.PodManager.GetPodControllerRevisionHash(ctx, nodeState.DriverPod)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to get pod template generation", "pod", nodeState.DriverPod)
+				err, "Failed to get pod template revision hash", "pod", nodeState.DriverPod)
 			return err
 		}
-		if podTemplateGeneration != nodeState.DriverDaemonSet.GetGeneration() {
+		m.Log.V(consts.LogLevelDebug).Info("pod template revision hash", "hash", podRevisionHash)
+		daemonsetRevisionHash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
+			return err
+		}
+		m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
+		if podRevisionHash != daemonsetRevisionHash {
 			// If node requires upgrade and is Unschedulable, track this in an
 			// annotation and leave node in Unschedulable state when upgrade completes.
 			if isNodeUnschedulable(nodeState.Node) {
@@ -589,13 +596,21 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 
 	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
-		podTemplateGeneration, err := utils.GetPodTemplateGeneration(nodeState.DriverPod, m.Log)
+		podRevisionHash, err := m.PodManager.GetPodControllerRevisionHash(ctx, nodeState.DriverPod)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to get pod template generation", "pod", nodeState.DriverPod)
+				err, "Failed to get pod template revision hash", "pod", nodeState.DriverPod)
 			return err
 		}
-		if podTemplateGeneration != nodeState.DriverDaemonSet.GetGeneration() {
+		m.Log.V(consts.LogLevelDebug).Info("pod template revision hash", "hash", podRevisionHash)
+		daemonsetRevisionHash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
+			return err
+		}
+		m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
+		if podRevisionHash != daemonsetRevisionHash {
 			// Pods should only be scheduled for restart if they are not terminating or restarting already
 			// To determinate terminating state we need to check for deletion timestamp with will be filled
 			// one pod termination process started
@@ -603,7 +618,7 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
-			driverPodInSync, err := m.isDriverPodInSync(nodeState)
+			driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to check if driver pod on the node is in sync", "nodeState", nodeState)
@@ -639,7 +654,7 @@ func (m *ClusterUpgradeStateManager) ProcessUpgradeFailedNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeFailedNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateFailed] {
-		driverPodInSync, err := m.isDriverPodInSync(nodeState)
+		driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
 				err, "Failed to check if driver pod on the node is in sync", "nodeState", nodeState)
@@ -727,15 +742,23 @@ func (m *ClusterUpgradeStateManager) ProcessUncordonRequiredNodes(
 	return nil
 }
 
-func (m *ClusterUpgradeStateManager) isDriverPodInSync(nodeState *NodeUpgradeState) (bool, error) {
-	podTemplateGeneration, err := utils.GetPodTemplateGeneration(nodeState.DriverPod, m.Log)
+func (m *ClusterUpgradeStateManager) isDriverPodInSync(ctx context.Context, nodeState *NodeUpgradeState) (bool, error) {
+	podRevisionHash, err := m.PodManager.GetPodControllerRevisionHash(ctx, nodeState.DriverPod)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
-			err, "Failed to get pod template generation", "pod", nodeState.DriverPod)
+			err, "Failed to get pod template revision hash", "pod", nodeState.DriverPod)
 		return false, err
 	}
+	m.Log.V(consts.LogLevelDebug).Info("pod template revision hash", "hash", podRevisionHash)
+	daemonsetRevisionHash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
+	if err != nil {
+		m.Log.V(consts.LogLevelError).Error(
+			err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
+		return false, err
+	}
+	m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
 	// If the pod generation matches the daemonset generation
-	if podTemplateGeneration == nodeState.DriverDaemonSet.GetGeneration() &&
+	if podRevisionHash == daemonsetRevisionHash &&
 		// And the pod is running
 		nodeState.DriverPod.Status.Phase == "Running" &&
 		// And it has at least 1 container

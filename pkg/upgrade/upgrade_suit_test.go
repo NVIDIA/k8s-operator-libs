@@ -143,6 +143,19 @@ var _ = BeforeSuite(func() {
 	podManager.
 		On("GetPodDeletionFilter").
 		Return(nil)
+	podManager.
+		On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
+		Return(
+			func(ctx context.Context, pod *corev1.Pod) string {
+				return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
+			},
+			func(ctx context.Context, pod *corev1.Pod) error {
+				return nil
+			},
+		)
+	podManager.
+		On("GetDaemonsetControllerRevisionHash", mock.Anything, mock.Anything, mock.Anything).
+		Return("test-hash-12345", nil)
 	cordonManager = mocks.CordonManager{}
 	cordonManager.
 		On("Cordon", mock.Anything, mock.Anything, mock.Anything).
