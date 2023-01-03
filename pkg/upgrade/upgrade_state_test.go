@@ -516,13 +516,13 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		"if it's in PodRestart, driver pod is up-to-date and ready, and validation is enabled", func() {
 		ctx := context.TODO()
 
-		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{Generation: 3}}
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
 		pod := &corev1.Pod{
 			Status: corev1.PodStatus{
 				Phase:             "Running",
 				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
 			},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{utils.PodTemplateGenerationLabel: "3"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
 		podRestartNode := NewNode(fmt.Sprintf("node1-%s", id)).
 			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
 			Create()
