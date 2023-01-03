@@ -30,7 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api"
+	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 

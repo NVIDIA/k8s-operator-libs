@@ -87,7 +87,7 @@ misspell:
 	misspell $(MODULE)/...
 
 generate: controller-gen ## Generate code
-	$(CONTROLLER_GEN) object paths="./api"
+	$(CONTROLLER_GEN) object object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 
 test-gen:
 	go generate $(MODULE)/...
