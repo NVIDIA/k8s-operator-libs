@@ -62,6 +62,7 @@ var _ = Describe("PodManager", func() {
 				TimeoutSecond:  300,
 				DeleteEmptyDir: false,
 			},
+			DrainEnabled: false,
 		}
 	})
 
@@ -232,7 +233,8 @@ var _ = Describe("PodManager", func() {
 			}
 		})
 
-		It("should delete all standalone gpu pods with force", func() {
+		It("should delete all standalone gpu pods with force"+
+			" and drain should be skipped", func() {
 			gpuPods = []*corev1.Pod{
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
 				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
@@ -259,10 +261,11 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
 		})
 
-		It("should fail to delete all standalone gpu pods without force", func() {
+		It("should fail to delete all standalone gpu pods without force,"+
+			" and node should be moved to UpgradeStateFailed when drain is disabled", func() {
 			gpuPods = []*corev1.Pod{
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
 				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
@@ -273,6 +276,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 
 			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			podManagerConfig.DrainEnabled = false
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
 			// when deleting pods on a node. The node will be transitioned to the UpgradeFailed
@@ -293,7 +297,40 @@ var _ = Describe("PodManager", func() {
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
 		})
 
-		It("should delete all standalone gpu pods using emptyDir when force=true and deleteEmptyDir=true ", func() {
+		It("should fail to delete all standalone gpu pods without force,"+
+			" and node should be moved to UpgradeStateDrainRequired when drain is enabled", func() {
+			gpuPods = []*corev1.Pod{
+				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
+				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			podManagerConfig.DrainEnabled = true
+			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
+			// Note: SchedulePodEviction() will not return an error if issues were encountered
+			// when deleting pods on a node.
+			Expect(err).To(Succeed())
+
+			// add a slight delay to let go routines to run to completion on pod eviction to update nodes states
+			time.Sleep(100 * time.Millisecond)
+
+			// check number of pods still running in namespace
+			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			Expect(podList.Items).To(HaveLen(len(cpuPods) + len(gpuPods)))
+
+			// verify upgrade state is set to UpgradeStateDrainRequired
+			node, err = provider.GetNode(ctx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
+		})
+
+		It("should delete all standalone gpu pods using emptyDir when force=true and deleteEmptyDir=true"+
+			" and drain should be skipped", func() {
 			gpuPods = []*corev1.Pod{
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
 				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
@@ -323,10 +360,11 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
 		})
 
-		It("should fail to delete all standalone gpu pods with emptyDir when force=true and deleteEmptyDir=false", func() {
+		It("should fail to delete all standalone gpu pods with emptyDir when force=true and deleteEmptyDir=false,"+
+			" and node should be moved to UpgradeStateFailed when drain is disabled", func() {
 			gpuPods = []*corev1.Pod{
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").WithEmptyDir().Create(),
 			}
@@ -336,6 +374,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 
 			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DrainEnabled = false
 			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
@@ -355,6 +394,38 @@ var _ = Describe("PodManager", func() {
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
+		})
+
+		It("should fail to delete all standalone gpu pods with emptyDir when force=true and deleteEmptyDir=false,"+
+			" and node should be moved to UpgradeStateDrainRequired when drain is enabled", func() {
+			gpuPods = []*corev1.Pod{
+				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").WithEmptyDir().Create(),
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DrainEnabled = true
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
+			// Note: SchedulePodEviction() will not return an error if issues were encountered
+			// when deleting pods on a node.
+			Expect(err).To(Succeed())
+
+			// add a slight delay to let go routines to run to completion on pod eviction to update nodes states
+			time.Sleep(100 * time.Millisecond)
+
+			// check number of pods still running in namespace
+			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(ctx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			Expect(podList.Items).To(HaveLen(len(cpuPods) + len(gpuPods)))
+
+			// verify upgrade state is set to UpgradeStateDrainRequired
+			node, err = provider.GetNode(ctx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
 		})
 	})
 })
