@@ -124,7 +124,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Drained the node", "node", node.Name)
-				logEventf(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
+				logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
 
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStatePodRestartRequired)
 			}()

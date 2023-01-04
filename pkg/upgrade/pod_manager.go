@@ -64,6 +64,7 @@ type PodManagerConfig struct {
 	Nodes                 []*corev1.Node
 	DeletionSpec          *v1alpha1.PodDeletionSpec
 	WaitForCompletionSpec *v1alpha1.WaitForCompletionSpec
+	DrainEnabled          bool
 }
 
 const (
@@ -182,7 +183,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 
 				if numPodsToDelete == 0 {
 					m.log.V(consts.LogLevelInfo).Info("No pods require deletion", "node", node.Name)
-					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateDrainRequired)
+					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStatePodRestartRequired)
 					return
 				}
 
@@ -197,7 +198,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 							m.log.V(consts.LogLevelError).Error(err, "Error reported by drain helper", "node", node.Name)
 						}
 					}
-					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateFailed)
+					m.updateNodeToDrainOrFailed(ctx, node, config.DrainEnabled)
 					return
 				}
 
@@ -209,13 +210,13 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 				err = drainHelper.DeleteOrEvictPods(podDeleteList.Pods())
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to delete pods on the node", "node", node.Name)
-					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateFailed)
 					logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(), "Failed to delete workload pods on the node for the driver upgrade, %s", err.Error())
+					m.updateNodeToDrainOrFailed(ctx, node, config.DrainEnabled)
 					return
 				}
 
 				m.log.V(consts.LogLevelInfo).Info("Deleted pods on the node", "node", node.Name)
-				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStateDrainRequired)
+				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStatePodRestartRequired)
 				logEvent(m.eventRecorder, &node, corev1.EventTypeNormal, GetEventReason(), "Deleted workload pods on the node for the driver upgrade")
 			}(*node)
 		} else {
@@ -361,6 +362,17 @@ func (m *PodManagerImpl) IsPodRunning(pod corev1.Pod) bool {
 		return false
 	}
 	return false
+}
+
+func (m *PodManagerImpl) updateNodeToDrainOrFailed(ctx context.Context, node corev1.Node, drainEnabled bool) {
+	nextState := UpgradeStateFailed
+	if drainEnabled {
+		m.log.V(consts.LogLevelInfo).Info("Pod deletion failed but drain is enabled in spec. Will attempt a node drain", "node", node.Name)
+		logEvent(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(), "Pod deletion failed but drain is enabled in spec. Will attempt a node drain")
+		nextState = UpgradeStateDrainRequired
+	}
+	_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, nextState)
+	return
 }
 
 // NewPodManager returns an instance of PodManager implementation

@@ -333,7 +333,8 @@ func (m *ClusterUpgradeStateManager) ApplyState(ctx context.Context,
 		return err
 	}
 
-	err = m.ProcessPodDeletionRequiredNodes(ctx, currentState, upgradePolicy.PodDeletion)
+	drainEnabled := upgradePolicy.DrainSpec != nil && upgradePolicy.DrainSpec.Enable == true
+	err = m.ProcessPodDeletionRequiredNodes(ctx, currentState, upgradePolicy.PodDeletion, drainEnabled)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed to delete pods")
 		return err
@@ -527,11 +528,12 @@ func (m *ClusterUpgradeStateManager) ProcessWaitForJobsRequiredNodes(
 // deletes select pods on a node, and moves the nodes to UpgradeStateDrainRequiredRequired state.
 // Pods selected for deletion are determined via PodManager.PodDeletion
 func (m *ClusterUpgradeStateManager) ProcessPodDeletionRequiredNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *v1alpha1.PodDeletionSpec) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *v1alpha1.PodDeletionSpec, drainEnabled bool) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessPodDeletionRequiredNodes")
 
 	podManagerConfig := PodManagerConfig{
 		DeletionSpec: podDeletionSpec,
+		DrainEnabled: drainEnabled,
 		Nodes:        make([]*corev1.Node, 0, len(currentClusterState.NodeStates[UpgradeStatePodDeletionRequired])),
 	}
 
