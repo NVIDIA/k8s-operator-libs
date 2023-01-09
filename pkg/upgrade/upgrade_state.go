@@ -641,6 +641,19 @@ func (m *ClusterUpgradeStateManager) ProcessPodRestartNodes(
 						err, "Failed to change node upgrade state", "state", UpgradeStateValidationRequired)
 					return err
 				}
+			} else {
+				// driver pod not in sync, move node to failed state if repeated container restarts
+				if !m.isDriverPodFailing(nodeState.DriverPod) {
+					continue
+				}
+				m.Log.V(consts.LogLevelInfo).Info("Driver pod is failing on node with repeated restarts",
+					"node", nodeState.Node.Name, "pod", nodeState.DriverPod.Name)
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateFailed)
+				if err != nil {
+					m.Log.V(consts.LogLevelError).Error(
+						err, "Failed to change node upgrade state for node", "node", nodeState.Node.Name, "state", UpgradeStateFailed)
+					return err
+				}
 			}
 		}
 	}
@@ -777,6 +790,20 @@ func (m *ClusterUpgradeStateManager) isDriverPodInSync(ctx context.Context, node
 	}
 
 	return false, nil
+}
+
+func (m *ClusterUpgradeStateManager) isDriverPodFailing(pod *corev1.Pod) bool {
+	for _, status := range pod.Status.InitContainerStatuses {
+		if !status.Ready && status.RestartCount > 10 {
+			return true
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if !status.Ready && status.RestartCount > 10 {
+			return true
+		}
+	}
+	return false
 }
 
 // skipNodeUpgrade returns true if node is labelled to skip driver upgrades

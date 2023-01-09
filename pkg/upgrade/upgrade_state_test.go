@@ -512,6 +512,52 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(isUnschedulableAnnotationPresent(podRestartNode)).To(Equal(false))
 		Expect(isUnschedulableAnnotationPresent(upgradeFailedNode)).To(Equal(false))
 	})
+	It("UpgradeStateManager should move pod to UpgradeFailed state "+
+		"if it's in PodRestart and driver pod is failing with repeated restarts", func() {
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+		// pod1, mainCtr not Ready w/ no repeated restarts
+		pod1 := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase:             "Running",
+				ContainerStatuses: []corev1.ContainerStatus{{Ready: false, RestartCount: 0}},
+			},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}},
+		}
+		// pod2, initCtr finished, mainCtr not Ready w/ no repeated restarts
+		pod2 := pod1.DeepCopy()
+		pod2.Status.InitContainerStatuses = []corev1.ContainerStatus{{Ready: true, RestartCount: 0}}
+		// pod3, initCtr finished, mainCtr not Ready w/ repeated restarts
+		pod3 := pod2.DeepCopy()
+		pod3.Status.ContainerStatuses[0].RestartCount = 11
+		// pod4, initCtr repeated restarts, mainCtr not Ready w/ no repeated restarts
+		pod4 := pod1.DeepCopy()
+		pod4.Status.InitContainerStatuses = []corev1.ContainerStatus{{Ready: false, RestartCount: 11}}
+
+		nodes := make([]*corev1.Node, 4)
+		for i := 0; i < len(nodes); i++ {
+			nodes[i] = NewNode(fmt.Sprintf("node%d-%s", i, id)).
+				WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
+				Create()
+		}
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
+			{Node: nodes[0], DriverPod: pod1, DriverDaemonSet: daemonSet},
+			{Node: nodes[1], DriverPod: pod2, DriverDaemonSet: daemonSet},
+			{Node: nodes[2], DriverPod: pod3, DriverDaemonSet: daemonSet},
+			{Node: nodes[3], DriverPod: pod4, DriverDaemonSet: daemonSet},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(nodes[0])).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+		Expect(getNodeUpgradeState(nodes[1])).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+		Expect(getNodeUpgradeState(nodes[2])).To(Equal(upgrade.UpgradeStateFailed))
+		Expect(getNodeUpgradeState(nodes[3])).To(Equal(upgrade.UpgradeStateFailed))
+	})
 	It("UpgradeStateManager should move pod to UpgradeValidationRequired state "+
 		"if it's in PodRestart, driver pod is up-to-date and ready, and validation is enabled", func() {
 		ctx := context.TODO()
@@ -522,7 +568,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				Phase:             "Running",
 				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
 			},
-			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}},
+		}
 		podRestartNode := NewNode(fmt.Sprintf("node1-%s", id)).
 			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
 			Create()
@@ -535,7 +582,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				DriverDaemonSet: daemonSet,
 			},
 		}
-
 		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 		}
@@ -622,7 +668,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateDone))
 		// unschedulable annotation should be removed
 		Expect(isUnschedulableAnnotationPresent(node)).To(Equal(false))
-
 	})
 	It("UpgradeStateManager should uncordon UncordonRequired pod and finish upgrade", func() {
 		node := nodeWithUpgradeState(upgrade.UpgradeStateUncordonRequired)
