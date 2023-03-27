@@ -19,6 +19,8 @@ package upgrade_test
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	. "github.com/onsi/ginkgo"
@@ -53,6 +55,7 @@ var _ = Describe("ValidationManager", func() {
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
 	})
 
 	It("Validate() should return true if validation pod is Running and Ready", func() {
@@ -64,6 +67,7 @@ var _ = Describe("ValidationManager", func() {
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(true))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
 	})
 
 	It("Validate() should return false if validation pod is Running but not Ready", func() {
@@ -78,6 +82,7 @@ var _ = Describe("ValidationManager", func() {
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
 	})
 
 	It("Validate() should return false if validation pod is not Running", func() {
@@ -92,6 +97,75 @@ var _ = Describe("ValidationManager", func() {
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
 	})
 
+	It("Validate() should mark node as UpgradeFailed when validation does not complete before timeout", func() {
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateValidationRequired)
+		Expect(err).To(Succeed())
+
+		pod := NewPod("pod", namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+		pod.Status.ContainerStatuses[0].Ready = false
+		_ = updatePodStatus(pod)
+
+		validationManager := upgrade.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationDone, err := validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(false))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateValidationRequired))
+
+		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
+
+		startTime := strconv.FormatInt(time.Now().Unix()-605, 10)
+		provider.ChangeNodeUpgradeAnnotation(ctx, node, upgrade.GetValidationStartTimeAnnotationKey(), startTime)
+
+		validationDone, err = validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(false))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
+	})
+
+	It("Validate() should remove annotation when validation completes before timeout", func() {
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateValidationRequired)
+		Expect(err).To(Succeed())
+
+		pod := NewPod("pod", namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+		pod.Status.ContainerStatuses[0].Ready = false
+		_ = updatePodStatus(pod)
+
+		validationManager := upgrade.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationDone, err := validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(false))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateValidationRequired))
+
+		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
+
+		pod.Status.ContainerStatuses[0].Ready = true
+		_ = updatePodStatus(pod)
+
+		validationDone, err = validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(true))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
+	})
 })

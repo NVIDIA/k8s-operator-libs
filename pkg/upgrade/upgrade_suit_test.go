@@ -437,6 +437,11 @@ func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {
 	return ok
 }
 
+func isValidationAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[upgrade.GetValidationStartTimeAnnotationKey()]
+	return ok
+}
+
 func randSeq(n int) string {
 	letters := []rune("abcdefghijklmnopqrstuvwxyz")
 	b := make([]rune, n)
