@@ -149,6 +149,8 @@ var _ = Describe("PodManager", func() {
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
+			// verify annotation which tracks start time is not added.
+			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
 		It("should not change the state of the node if workload pod is running", func() {
 			// initialize upgrade state of the node
@@ -175,6 +177,8 @@ var _ = Describe("PodManager", func() {
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateWaitForJobsRequired))
+			// verify annotation is added to track the start time.
+			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
 		It("should change the state of the node if workload pod is running and timeout is reached", func() {
 			// initialize upgrade state of the node
