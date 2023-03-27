@@ -27,6 +27,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
@@ -209,6 +210,237 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade:         true,
 			MaxParallelUpgrades: maxParallelUpgrades,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for _, state := range append(upgradeRequiredNodes, cordonRequiredNodes...) {
+			state := getNodeUpgradeState(state.Node)
+			stateCount[state]++
+		}
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(1))
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired] +
+			stateCount[upgrade.UpgradeStateWaitForJobsRequired]).To(Equal(4))
+	})
+	It("UpgradeStateManager should schedule upgrade all nodes if maxParallel upgrades is set to 0 and maxUnavailable is set to 100%", func() {
+		clusterState := upgrade.NewClusterUpgradeState()
+		nodeStates := []*upgrade.NodeUpgradeState{
+			{Node: NewNode("node1").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node2").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node3").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node4").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Node},
+			{Node: NewNode("node5").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Node},
+		}
+
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			// Unlimited upgrades
+			MaxParallelUpgrades: 0,
+			// Unlimited unavailable
+			MaxUnavailable: &intstr.IntOrString{Type: intstr.String, StrVal: "100%"},
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for i := range nodeStates {
+			state := getNodeUpgradeState(clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired][i].Node)
+			stateCount[state]++
+		}
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(0))
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(len(nodeStates)))
+	})
+	It("UpgradeStateManager should schedule upgrade based on maxUnavailable constraint if maxParallel upgrades is set to 0 and maxUnavailable is set to 50%", func() {
+		clusterState := upgrade.NewClusterUpgradeState()
+		nodeStates := []*upgrade.NodeUpgradeState{
+			{Node: NewNode("node1").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node2").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node3").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node4").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Node},
+			{Node: NewNode("node5").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Node},
+		}
+
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			// Unlimited upgrades
+			MaxParallelUpgrades: 0,
+			MaxUnavailable:      &intstr.IntOrString{Type: intstr.String, StrVal: "50%"},
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for i := range nodeStates {
+			state := getNodeUpgradeState(clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired][i].Node)
+			stateCount[state]++
+		}
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(2))
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(3))
+	})
+	It("UpgradeStateManager should schedule upgrade based on 50% maxUnavailable, with some unavailable nodes already upgraded", func() {
+		clusterState := upgrade.NewClusterUpgradeState()
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+		upToDatePod := &corev1.Pod{
+			Status:     corev1.PodStatus{Phase: "Running"},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
+
+		upgradeRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: NewNode("node1").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node2").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+			{Node: NewNode("node3").WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Node},
+		}
+		upgradeDoneNodes := []*upgrade.NodeUpgradeState{
+			{
+				Node:            NewNode("node4").WithUpgradeState(upgrade.UpgradeStateDone).Unschedulable(true).Node,
+				DriverPod:       upToDatePod,
+				DriverDaemonSet: daemonSet,
+			},
+			{
+				Node:            NewNode("node5").WithUpgradeState(upgrade.UpgradeStateDone).Unschedulable(true).Node,
+				DriverPod:       upToDatePod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = upgradeRequiredNodes
+		clusterState.NodeStates[upgrade.UpgradeStateDone] = upgradeDoneNodes
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			// Unlimited upgrades
+			MaxParallelUpgrades: 0,
+			MaxUnavailable:      &intstr.IntOrString{Type: intstr.String, StrVal: "50%"},
+		}
+
+		podManagerMock := mocks.PodManager{}
+		podManagerMock.
+			On("SchedulePodsRestart", mock.Anything, mock.Anything).
+			Return(func(ctx context.Context, podsToDelete []*corev1.Pod) error {
+				Expect(podsToDelete).To(HaveLen(0))
+				return nil
+			})
+		podManagerMock.
+			On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
+			Return(
+				func(ctx context.Context, pod *corev1.Pod) string {
+					return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
+				},
+				func(ctx context.Context, pod *corev1.Pod) error {
+					return nil
+				},
+			)
+		podManagerMock.
+			On("GetDaemonsetControllerRevisionHash", mock.Anything, mock.Anything, mock.Anything).
+			Return("test-hash-12345", nil)
+		stateManager.PodManager = &podManagerMock
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for i := range upgradeRequiredNodes {
+			state := getNodeUpgradeState(clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired][i].Node)
+			stateCount[state]++
+		}
+		for i := range upgradeDoneNodes {
+			state := getNodeUpgradeState(clusterState.NodeStates[upgrade.UpgradeStateDone][i].Node)
+			stateCount[state]++
+		}
+		// check if already upgraded node states are not changed
+		Expect(stateCount[upgrade.UpgradeStateDone]).To(Equal(2))
+		// expect only single node to move to next state as upgradesUnavailble = maxUnavailable(3) - currentlyUnavailable(2)
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(1))
+		// remaining nodes to be in same original state
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(2))
+	})
+	It("UpgradeStateManager should start upgrade on limited amount of nodes "+
+		"if maxParallel upgrades  and maxUnavailable are less than node count", func() {
+		const maxParallelUpgrades = 3
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		nodeStates := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+		}
+
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade:         true,
+			MaxParallelUpgrades: maxParallelUpgrades,
+			MaxUnavailable:      &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for i := range nodeStates {
+			state := getNodeUpgradeState(nodeStates[i].Node)
+			stateCount[state]++
+		}
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(3))
+		// only maxUnavailable nodes should progress to next state
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(2))
+	})
+	It("UpgradeStateManager should start additional upgrades if maxParallelUpgrades and maxUnavailable limits are not reached", func() {
+		const maxParallelUpgrades = 4
+
+		upgradeRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+		}
+		cordonRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+		}
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = upgradeRequiredNodes
+		clusterState.NodeStates[upgrade.UpgradeStateCordonRequired] = cordonRequiredNodes
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade:         true,
+			MaxParallelUpgrades: maxParallelUpgrades,
+			MaxUnavailable:      &intstr.IntOrString{Type: intstr.Int, IntVal: 4},
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		stateCount := make(map[string]int)
+		for _, state := range append(upgradeRequiredNodes, cordonRequiredNodes...) {
+			state := getNodeUpgradeState(state.Node)
+			stateCount[state]++
+		}
+		Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(1))
+		Expect(stateCount[upgrade.UpgradeStateCordonRequired] +
+			stateCount[upgrade.UpgradeStateWaitForJobsRequired]).To(Equal(4))
+	})
+	It("UpgradeStateManager should start additional upgrades if maxParallelUpgrades and maxUnavailable limits are not reached", func() {
+		const maxParallelUpgrades = 4
+
+		upgradeRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)},
+		}
+		cordonRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStateCordonRequired)},
+		}
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = upgradeRequiredNodes
+		clusterState.NodeStates[upgrade.UpgradeStateCordonRequired] = cordonRequiredNodes
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade:         true,
+			MaxParallelUpgrades: maxParallelUpgrades,
+			MaxUnavailable:      &intstr.IntOrString{Type: intstr.Int, IntVal: 4},
 			DrainSpec: &v1alpha1.DrainSpec{
 				Enable: true,
 			},
