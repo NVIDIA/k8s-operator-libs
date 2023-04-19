@@ -16,7 +16,7 @@ MODULE := github.com/NVIDIA/k8s-operator-libs
 
 DOCKER ?= docker
 
-GOLANG_VERSION := 1.18
+GOLANG_VERSION := 1.20
 
 ifeq ($(IMAGE),)
 REGISTRY ?= nvidia
