@@ -499,6 +499,44 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 
 	})
+	It("UpgradeStateManager should not attempt to delete pods if pod deletion is disabled", func() {
+		ctx := context.TODO()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		nodes := []*upgrade.NodeUpgradeState{
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStatePodDeletionRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStatePodDeletionRequired)},
+			{Node: nodeWithUpgradeState(upgrade.UpgradeStatePodDeletionRequired)},
+		}
+
+		clusterState.NodeStates[upgrade.UpgradeStatePodDeletionRequired] = nodes
+
+		policyWithNoPodDeletionSpec := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		podEvictionCalled := false
+
+		podManagerMock := mocks.PodManager{}
+		podManagerMock.
+			On("SchedulePodEviction", mock.Anything, mock.Anything).
+			Return(func(ctx context.Context, config *upgrade.PodManagerConfig) error {
+				podEvictionCalled = true
+				return nil
+			}).
+			On("SchedulePodsRestart", mock.Anything, mock.Anything).
+			Return(func(ctx context.Context, pods []*corev1.Pod) error {
+				return nil
+			})
+		stateManager.PodManager = &podManagerMock
+
+		Eventually(podEvictionCalled).ShouldNot(Equal(true))
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoPodDeletionSpec)).To(Succeed())
+		for _, state := range nodes {
+			Expect(getNodeUpgradeState(state.Node)).To(Equal(upgrade.UpgradeStateDrainRequired))
+		}
+	})
 	It("UpgradeStateManager should skip drain if it's disabled by policy", func() {
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] = []*upgrade.NodeUpgradeState{
