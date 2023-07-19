@@ -37,15 +37,16 @@ import (
 var _ = Describe("UpgradeStateManager tests", func() {
 	var ctx context.Context
 	var id string
-	var stateManager *upgrade.ClusterUpgradeStateManager
+	var stateManager *upgrade.ClusterUpgradeStateManagerImpl
 
 	BeforeEach(func() {
 		ctx = context.TODO()
 		id = randSeq(5)
-		// Create new ClusterUpgradeStateManager using mocked managers initialized in BeforeSuite()
+		// Create new ClusterUpgradeStateManagerImpl using mocked managers initialized in BeforeSuite()
 		var err error
-		stateManager, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig, eventRecorder)
+		stateManagerInterface, err := upgrade.NewClusterUpgradeStateManager(log, k8sConfig, eventRecorder)
 		Expect(err).NotTo(HaveOccurred())
+		stateManager, _ = stateManagerInterface.(*upgrade.ClusterUpgradeStateManagerImpl)
 		stateManager.NodeUpgradeStateProvider = &nodeUpgradeStateProvider
 		stateManager.DrainManager = &drainManager
 		stateManager.CordonManager = &cordonManager
@@ -572,8 +573,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 	})
 	It("UpgradeStateManager should schedule drain for UpgradeStateDrainRequired nodes and pass drain config", func() {
-		skipDrainPodSelector := fmt.Sprintf("%s!=true", upgrade.GetUpgradeSkipDrainPodLabelKey())
-
 		clusterState := upgrade.NewClusterUpgradeState()
 		clusterState.NodeStates[upgrade.UpgradeStateDrainRequired] = []*upgrade.NodeUpgradeState{
 			{Node: nodeWithUpgradeState(upgrade.UpgradeStateDrainRequired)},
@@ -590,7 +589,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		// Upgrade state manager should add the pod selector for skipping network-operator pods
 		expectedDrainSpec := *policy.DrainSpec
-		expectedDrainSpec.PodSelector = skipDrainPodSelector
 
 		drainManagerMock := mocks.DrainManager{}
 		drainManagerMock.
@@ -605,7 +603,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(stateManager.ApplyState(ctx, &clusterState, &policy)).To(Succeed())
 
 		policy.DrainSpec.PodSelector = "test-label=test-value"
-		expectedDrainSpec.PodSelector = fmt.Sprintf("%s,%s", policy.DrainSpec.PodSelector, skipDrainPodSelector)
+		expectedDrainSpec.PodSelector = policy.DrainSpec.PodSelector
 		Expect(stateManager.ApplyState(ctx, &clusterState, &policy)).To(Succeed())
 	})
 	It("UpgradeStateManager should fail if drain manager returns an error", func() {
