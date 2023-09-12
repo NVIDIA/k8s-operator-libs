@@ -18,11 +18,13 @@ spec:
   driver:
     upgradePolicy:
       # autoUpgrade is a global switch for automatic upgrade feature
-	  # if set to false all other options are ignored
+      # if set to false all other options are ignored
       autoUpgrade: true
       # maxParallelUpgrades indicates how many nodes can be upgraded in parallel
-	  # 0 means no limit, all nodes will be upgraded in parallel
+      # 0 means no limit, all nodes will be upgraded in parallel
       maxParallelUpgrades: 0
+      # cordon and drain (if enabled) a node before loading the driver on it
+      safeLoad: false
       # describes configuration for node drain during automatic upgrade
       drain:
         # allow node draining during upgrade
@@ -38,29 +40,48 @@ spec:
         deleteEmptyDir: false
 ```
 
-* To track each node's upgrade status separately, run `kubectl describe node <node_name> | grep nvidia.com/<driver-name>-upgrade-state`. See [Node upgrade states](#node-upgrade-states) section describing each state.
+* To track each node's upgrade status separately, run `kubectl describe node <node_name> | grep nvidia.com/<driver-name>-driver-upgrade-state`. See [Node upgrade states](#node-upgrade-states) section describing each state.
+
+### Safe driver loading
+
+The state of the feature can be controlled with `driver.upgradePolicy.safeLoad` option.
+
+On Node startup, the containerized driver takes time to compile and load.
+During that time, workloads might get scheduled on that Node.
+When the driver is eventually loaded, all existing PODs using resources managed by the driver will lose access to them.
+Some such PODs might silently fail or hang.
+To avoid such a situation, before the containerized driver is loaded,
+the Node should get Cordoned and Drained to ensure all workloads are rescheduled.
+The Node should be un-cordoned when the driver is ready on it.
+
+The safe driver loading feature is implemented as a part of the upgrade flow, 
+meaning safe driver loading is a special scenario of the upgrade procedure, 
+where we upgrade from the inbox driver (driver which is installed on the host) to the containerized driver.
+
 
 ### Details
 #### Node upgrade states
-Each node's upgrade status is reflected in its `nvidia.com/<driver-name>-upgrade-state` label. This label can have the following values:
-* Unknown (empty): node has this state when the upgrade flow is disabled or the node hasn't been processed yet
-* `upgrade-done` is set when the driver Pod is up to date and running on the node, the node is schedulable
-UpgradeStateDone = "upgrade-done"
-* `upgrade-required` is set when the driver Pod on the node is not up-to-date and requires upgrade. No actions are performed at this stage
-* `cordon` is set when the node is set to cordon. After this no new workloads can be scheduled onto the node until the upgrade is complete.
-* `wait-for-completion` is set when the node is set to wait for running workloads to complete. This state can be optional.
-* `drain` is set when the node is scheduled for drain. After the drain the state is changed either to `pod-restart` or `drain-failed`
-UpgradeStateDrain = "drain"
-* `pod-restart` is set when the driver Pod on the node is scheduler for restart. After the restart state is changed to `uncordon-required`
-* `drain-failed` is set when drain on the node has failed. Manual interaction is required at this stage. See [Troubleshooting](#node-is-in-drain-failed-state) section for more details.
-* `uncordon-required` is set when the driver Pod on the node is up-to-date and has "Ready" status. After uncordone the state is changed to `upgrade-done`
+Each node's upgrade status is reflected in its `nvidia.com/<driver-name>-driver-upgrade-state` label. This label can have the following values:
+*  Unknown (empty) node has this state when the upgrade flow is disabled or the node hasn't been processed yet
+* `upgrade-required`  is set when the driver pod on the node is not up-to-date and required upgrade or if the driver is waiting for safe load
+* `cordon-required` is set when the node needs to be made unschedulable in preparation for driver upgrade
+* `wait-for-jobs-required` is set on the node when we need to wait on jobs to complete until given timeout
+* `drain-required` is set when the node is required to be scheduled for drain
+* `pod-restart-required` is set when the driver pod on the node is scheduled for restart 
+or when unblock of the driver loading is required (safe driver load)
+* `validation-required` is set when validation of the new driver deployed on the node is required before moving to `uncordon-required`
+* `uncordon-required` is set when driver pod on the node is up-to-date and has "Ready" status
+* `upgrade-done` is set when driver pod is up to date and running on the node, the node is schedulable
+* `upgrade-failed` is set when there are any failures during the driver upgrade, see [Troubleshooting](#node-is-in-drain-failed-state) section for more details.
 
 #### State change diagram
+
+_NOTE: the diagram is outdated_
 
 ![State change diagram](images/driver-upgrade-state-diagram.png)
 
 ### Troubleshooting
-#### Node is in `drain-failed` state
+#### Node is in `upgrade-failed` state
 * Drain the node manually by running `kubectl drain <node_name> --ignore-daemonsets`
 * Delete the driver pod on the node manually by running the following command:
 

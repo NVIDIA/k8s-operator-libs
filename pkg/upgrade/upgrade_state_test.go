@@ -27,6 +27,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
@@ -135,6 +136,29 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(isUnschedulableAnnotationPresent(DoneToDoneNode)).
 			To(Equal(false))
 
+	})
+	It("UpgradeStateManager should move up-to-date nodes with safe driver loading annotation "+
+		"to UpgradeRequired state", func() {
+		ctx := context.TODO()
+
+		safeLoadAnnotationKey := upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+		upToDatePod := &corev1.Pod{
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
+
+		waitForSafeLoadNode := NewNode(fmt.Sprintf("node1-%s", id)).
+			WithAnnotations(map[string]string{safeLoadAnnotationKey: "true"}).
+			Create()
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateDone] = []*upgrade.NodeUpgradeState{{
+			Node: waitForSafeLoadNode, DriverPod: upToDatePod, DriverDaemonSet: daemonSet,
+		}}
+
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(getNodeUpgradeState(waitForSafeLoadNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 	})
 	It("UpgradeStateManager should schedule upgrade on all nodes if maxParallel upgrades is set to 0", func() {
 		clusterState := upgrade.NewClusterUpgradeState()
@@ -691,6 +715,40 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		stateManager.PodManager = &podManagerMock
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+	})
+	It("UpgradeStateManager should unblock loading of the driver instead of restarting the Pod when node "+
+		"is waiting for safe driver loading", func() {
+		safeLoadAnnotation := upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+
+		upToDatePod := &corev1.Pod{
+			Status:     corev1.PodStatus{Phase: "Running"},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}}
+
+		waitForSafeLoadNode := NewNode(fmt.Sprintf("node1-%s", id)).
+			WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
+			WithAnnotations(map[string]string{safeLoadAnnotation: "true"}).
+			Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            waitForSafeLoadNode,
+				DriverPod:       upToDatePod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		stateManager.NodeUpgradeStateProvider = provider
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: waitForSafeLoadNode.Name}, waitForSafeLoadNode)).
+			NotTo(HaveOccurred())
+		Expect(waitForSafeLoadNode.Annotations[safeLoadAnnotation]).To(BeEmpty())
 	})
 	It("UpgradeStateManager should move pod to UncordonRequired state "+
 		"if it's in PodRestart or UpgradeFailed, up to date and ready", func() {

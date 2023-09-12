@@ -21,6 +21,10 @@ const (
 	UpgradeStateLabelKeyFmt = "nvidia.com/%s-driver-upgrade-state"
 	// UpgradeSkipNodeLabelKeyFmt is the format of the node label boolean key indicating to skip driver upgrade
 	UpgradeSkipNodeLabelKeyFmt = "nvidia.com/%s-driver-upgrade.skip"
+	// UpgradeWaitForSafeDriverLoadAnnotationKeyFmt is the format of the node annotation key indicating that
+	// the driver is waiting for safe load. Meaning node should be cordoned and workloads should be removed from the
+	// node before the driver can continue to load.
+	UpgradeWaitForSafeDriverLoadAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade.driver-wait-for-safe-load"
 	// UpgradeInitialStateAnnotationKeyFmt is the format of the node annotation indicating node was unschedulable at beginning of upgrade process
 	UpgradeInitialStateAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade.node-initial-state.unschedulable"
 	// UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt is the format of the node annotation indicating start time for waiting on pod completions
@@ -41,7 +45,8 @@ const (
 	// UpgradeStateDrainRequired is set when the node is required to be scheduled for drain. After the drain the state is changed
 	// either to UpgradeStatePodRestartRequired or UpgradeStateFailed
 	UpgradeStateDrainRequired = "drain-required"
-	// UpgradeStatePodRestartRequired is set when the driver pod on the node is scheduled for restart.
+	// UpgradeStatePodRestartRequired is set when the driver pod on the node is scheduled for restart
+	// or when unblock of the driver loading is required (safe driver load)
 	UpgradeStatePodRestartRequired = "pod-restart-required"
 	// UpgradeStateValidationRequired is set when validation of the new driver deployed on the node is
 	// required before moving to UpgradeStateUncordonRequired.
