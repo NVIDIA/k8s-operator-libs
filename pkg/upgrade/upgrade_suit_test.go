@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
 	batchv1 "k8s.io/api/batch/v1"
@@ -164,7 +164,7 @@ var _ = BeforeSuite(func() {
 	validationManager.
 		On("Validate", mock.Anything, mock.Anything).
 		Return(true, nil)
-}, 60)
+})
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")

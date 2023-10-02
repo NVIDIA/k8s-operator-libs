@@ -22,10 +22,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("ValidationManager", func() {
