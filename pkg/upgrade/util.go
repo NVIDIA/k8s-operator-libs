@@ -98,6 +98,12 @@ func GetUpgradeSkipNodeLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
 }
 
+// GetUpgradeDriverWaitForSafeLoadAnnotationKey returns the key for annotation used to mark node as waiting for driver
+// safe load
+func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
+	return fmt.Sprintf(UpgradeWaitForSafeDriverLoadAnnotationKeyFmt, DriverName)
+}
+
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
 func GetUpgradeInitialStateAnnotationKey() string {
 	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)

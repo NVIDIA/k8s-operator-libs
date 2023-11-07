@@ -86,6 +86,7 @@ type ClusterUpgradeStateManagerImpl struct {
 	CordonManager            CordonManager
 	NodeUpgradeStateProvider NodeUpgradeStateProvider
 	ValidationManager        ValidationManager
+	SafeDriverLoadManager    SafeDriverLoadManager
 
 	// optional states
 	podDeletionStateEnabled bool
@@ -119,6 +120,7 @@ func NewClusterUpgradeStateManager(
 		CordonManager:            NewCordonManager(k8sInterface, log),
 		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
 		ValidationManager:        NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
+		SafeDriverLoadManager:    NewSafeDriverLoadManager(nodeUpgradeStateProvider, log),
 	}
 	return manager, nil
 }
@@ -431,7 +433,17 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessDoneOrUnknownNodes(
 			return err
 		}
 		m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
-		if podRevisionHash != daemonsetRevisionHash {
+		isWaitingForSafeDriverLoad, err := m.SafeDriverLoadManager.IsWaitingForSafeDriverLoad(ctx, nodeState.Node)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to check safe driver load status for the node", "node", nodeState.Node.Name)
+			return err
+		}
+		if isWaitingForSafeDriverLoad {
+			m.Log.V(consts.LogLevelInfo).Info("Node is waiting for safe driver load, initialize upgrade",
+				"node", nodeState.Node.Name)
+		}
+		if podRevisionHash != daemonsetRevisionHash || isWaitingForSafeDriverLoad {
 			// If node requires upgrade and is Unschedulable, track this in an
 			// annotation and leave node in Unschedulable state when upgrade completes.
 			if isNodeUnschedulable(nodeState.Node) {
@@ -664,6 +676,12 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessPodRestartNodes(
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
+			err := m.SafeDriverLoadManager.UnblockLoading(ctx, nodeState.Node)
+			if err != nil {
+				m.Log.V(consts.LogLevelError).Error(
+					err, "Failed to unblock loading of the driver", "nodeState", nodeState)
+				return err
+			}
 			driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
@@ -752,13 +770,21 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeFailedNodes(
 	return nil
 }
 
-// ProcessValidationRequiredNodes
+// ProcessValidationRequiredNodes processes UpgradeStateValidationRequired nodes
 func (m *ClusterUpgradeStateManagerImpl) ProcessValidationRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessValidationRequiredNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateValidationRequired] {
 		node := nodeState.Node
+		// make sure that the driver Pod is not waiting for the safe load,
+		// this may happen in case if driver restarted after it was moved to UpgradeStateValidationRequired state
+		err := m.SafeDriverLoadManager.UnblockLoading(ctx, nodeState.Node)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to unblock loading of the driver", "nodeState", nodeState)
+			return err
+		}
 		validationDone, err := m.ValidationManager.Validate(ctx, node)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to validate driver upgrade", "node", node.Name)
