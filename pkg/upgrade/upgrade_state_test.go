@@ -515,7 +515,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 
 		filter := func(pod corev1.Pod) bool { return false }
-		stateManager = stateManager.WithPodDeletionEnabled(filter)
+		stateManager = stateManager.WithPodDeletionEnabled(filter).(*upgrade.ClusterUpgradeStateManagerImpl)
 		Expect(stateManager.IsPodDeletionEnabled()).To(Equal(true))
 
 		Expect(stateManager.ApplyState(ctx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
@@ -912,7 +912,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		stateManager = stateManager.WithValidationEnabled("app=validator")
+		stateManager = stateManager.WithValidationEnabled("app=validator").(*upgrade.ClusterUpgradeStateManagerImpl)
 		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
 		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
@@ -947,7 +947,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		stateManager = stateManager.WithValidationEnabled("app=validator")
+		stateManager = stateManager.WithValidationEnabled("app=validator").(*upgrade.ClusterUpgradeStateManagerImpl)
 		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
 		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
@@ -984,7 +984,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		stateManager = stateManager.WithValidationEnabled("app=validator")
+		stateManager = stateManager.WithValidationEnabled("app=validator").(*upgrade.ClusterUpgradeStateManagerImpl)
 		Expect(stateManager.IsValidationEnabled()).To(Equal(true))
 		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
