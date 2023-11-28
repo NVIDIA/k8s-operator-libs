@@ -56,20 +56,39 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 	return ClusterUpgradeState{NodeStates: make(map[string][]*NodeUpgradeState)}
 }
 
+// ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
 type ClusterUpgradeStateManager interface {
+	// ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
+	// Based on the current state of the node, it is calculated if the node can be moved to the next state right now
+	// or whether any actions need to be scheduled for the node to move to the next state.
+	// The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
+	// ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 	ApplyState(ctx context.Context,
 		currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error)
+	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 	BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error)
+	// GetTotalManagedNodes returns the total count of nodes managed for driver upgrades
 	GetTotalManagedNodes(ctx context.Context, currentState *ClusterUpgradeState) int
+	// GetUpgradesInProgress returns count of nodes on which upgrade is in progress
 	GetUpgradesInProgress(ctx context.Context, currentState *ClusterUpgradeState) int
+	// GetUpgradesDone returns count of nodes on which upgrade is complete
 	GetUpgradesDone(ctx context.Context, currentState *ClusterUpgradeState) int
+	// GetUpgradesAvailable returns count of nodes on which upgrade can be done
 	GetUpgradesAvailable(ctx context.Context,
 		currentState *ClusterUpgradeState, maxParallelUpgrades int, maxUnavailable int) int
+	// GetUpgradesFailed returns count of nodes on which upgrades have failed
 	GetUpgradesFailed(ctx context.Context, currentState *ClusterUpgradeState) int
+	// GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
 	GetUpgradesPending(ctx context.Context, currentState *ClusterUpgradeState) int
-	WithPodDeletionEnabled(filter PodDeletionFilter) *ClusterUpgradeStateManagerImpl
-	WithValidationEnabled(podSelector string) *ClusterUpgradeStateManagerImpl
+	// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion'
+	// state and pass a custom PodDeletionFilter to use
+	WithPodDeletionEnabled(filter PodDeletionFilter) ClusterUpgradeStateManager
+	// WithValidationEnabled provides an option to enable the optional 'validation' state
+	// and pass a podSelector to specify which pods are performing the validation
+	WithValidationEnabled(podSelector string) ClusterUpgradeStateManager
+	// IsPodDeletionEnabled returns true if 'pod-deletion' state is enabled
 	IsPodDeletionEnabled() bool
+	// IsValidationEnabled returns true if 'validation' state is enabled
 	IsValidationEnabled() bool
 }
 
@@ -126,7 +145,7 @@ func NewClusterUpgradeStateManager(
 }
 
 // WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom PodDeletionFilter to use
-func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeletionFilter) *ClusterUpgradeStateManagerImpl {
+func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeletionFilter) ClusterUpgradeStateManager {
 	if filter == nil {
 		m.Log.V(consts.LogLevelWarning).Info("Cannot enable PodDeletion state as PodDeletionFilter is nil")
 		return m
@@ -137,7 +156,7 @@ func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeleti
 }
 
 // WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify which pods are performing the validation
-func (m *ClusterUpgradeStateManagerImpl) WithValidationEnabled(podSelector string) *ClusterUpgradeStateManagerImpl {
+func (m *ClusterUpgradeStateManagerImpl) WithValidationEnabled(podSelector string) ClusterUpgradeStateManager {
 	if podSelector == "" {
 		m.Log.V(consts.LogLevelWarning).Info("Cannot enable Validation state as podSelector is empty")
 		return m
