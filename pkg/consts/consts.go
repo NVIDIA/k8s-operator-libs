@@ -27,7 +27,3 @@ const (
 	LogLevelInfo
 	LogLevelDebug
 )
-
-const (
-	NicClusterPolicyResourceName = "nic-cluster-policy"
-)
