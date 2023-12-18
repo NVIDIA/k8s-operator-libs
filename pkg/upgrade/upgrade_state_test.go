@@ -55,6 +55,80 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		stateManager.ValidationManager = &validationManager
 
 	})
+
+	Describe("BuildState", func() {
+		var namespace *corev1.Namespace
+
+		BeforeEach(func() {
+			namespace = createNamespace(fmt.Sprintf("namespace-%s", id))
+		})
+
+		It("should not fail when no pods exist", func() {
+			upgradeState, err := stateManager.BuildState(ctx, namespace.Name, map[string]string{"foo": "bar"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(0))
+		})
+
+		It("should process running daemonset pods without error", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			upgradeState, err := stateManager.BuildState(ctx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+		})
+
+		It("should not process daemonset pods which have not been scheduled yet", func() {
+			selector := map[string]string{"foo": "bar"}
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			pod := NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, "").
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+			pod.Status.Phase = corev1.PodPending
+			err := updatePodStatus(pod)
+			Expect(err).To(Succeed())
+
+			upgradeState, err := stateManager.BuildState(ctx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(0))
+		})
+
+		It("should process orphaned pods without error", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				Create()
+
+			upgradeState, err := stateManager.BuildState(ctx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+			Expect(upgradeState.NodeStates[""][0].IsOrphanedPod()).To(BeTrue())
+		})
+	})
+
 	Describe("ApplyState", func() {
 		It("UpgradeStateManager should fail on nil currentState", func() {
 			Expect(stateManager.ApplyState(ctx, nil, &v1alpha1.DriverUpgradePolicySpec{})).ToNot(Succeed())
@@ -1047,6 +1121,122 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(node)).ToNot(Equal(upgrade.UpgradeStateDone))
 		})
 	})
+	It("UpgradeStateManager should not move outdated node to UpgradeRequired states with orphaned pod", func() {
+		orphanedPod := &corev1.Pod{}
+
+		UnknownToUpgradeDoneNode := nodeWithUpgradeState("")
+		DoneToUpgradeDoneNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		unknownNodes := []*upgrade.NodeUpgradeState{
+			{Node: UnknownToUpgradeDoneNode, DriverPod: orphanedPod, DriverDaemonSet: nil},
+		}
+		doneNodes := []*upgrade.NodeUpgradeState{
+			{Node: DoneToUpgradeDoneNode, DriverPod: orphanedPod, DriverDaemonSet: nil},
+		}
+		clusterState.NodeStates[""] = unknownNodes
+		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(getNodeUpgradeState(UnknownToUpgradeDoneNode)).To(Equal(upgrade.UpgradeStateDone))
+		Expect(getNodeUpgradeState(DoneToUpgradeDoneNode)).To(Equal(upgrade.UpgradeStateDone))
+	})
+	It("UpgradeStateManager should move outdated node to UpgradeRequired states with orphaned pod if upgrade-requested", func() {
+		orphanedPod := &corev1.Pod{}
+
+		UnknownToUpgradeRequiredNode := nodeWithUpgradeState("")
+		UnknownToUpgradeRequiredNode.Annotations[upgrade.GetUpgradeRequestedAnnotationKey()] = "true"
+		DoneToUpgradeRequiredNode := nodeWithUpgradeState(upgrade.UpgradeStateDone)
+		DoneToUpgradeRequiredNode.Annotations[upgrade.GetUpgradeRequestedAnnotationKey()] = "true"
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		unknownNodes := []*upgrade.NodeUpgradeState{
+			{Node: UnknownToUpgradeRequiredNode, DriverPod: orphanedPod, DriverDaemonSet: nil},
+		}
+		doneNodes := []*upgrade.NodeUpgradeState{
+			{Node: DoneToUpgradeRequiredNode, DriverPod: orphanedPod, DriverDaemonSet: nil},
+		}
+		clusterState.NodeStates[""] = unknownNodes
+		clusterState.NodeStates[upgrade.UpgradeStateDone] = doneNodes
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(getNodeUpgradeState(UnknownToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+		Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+	})
+	It("UpgradeStateManager should move upgrade required node to CordonRequired states with orphaned pod and remove upgrade-requested annotation", func() {
+		orphanedPod := &corev1.Pod{}
+
+		UpgradeRequiredToCordonNodes := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+		UpgradeRequiredToCordonNodes.Annotations[upgrade.GetUpgradeRequestedAnnotationKey()] = "true"
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		upgradeRequiredNodes := []*upgrade.NodeUpgradeState{
+			{Node: UpgradeRequiredToCordonNodes, DriverPod: orphanedPod, DriverDaemonSet: nil},
+		}
+		clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = upgradeRequiredNodes
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+		Expect(getNodeUpgradeState(UpgradeRequiredToCordonNodes)).To(Equal(upgrade.UpgradeStateCordonRequired))
+		Expect(UpgradeRequiredToCordonNodes.Annotations[upgrade.GetUpgradeRequestedAnnotationKey()]).To(Equal(""))
+	})
+	It("UpgradeStateManager should restart pod if it is Orphaned", func() {
+		orphanedPod := &corev1.Pod{
+			Status:     corev1.PodStatus{Phase: "Running"},
+			ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            nodeWithUpgradeState(upgrade.UpgradeStatePodRestartRequired),
+				DriverPod:       orphanedPod,
+				DriverDaemonSet: nil,
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		podManagerMock := mocks.PodManager{}
+		podManagerMock.
+			On("SchedulePodsRestart", mock.Anything, mock.Anything).
+			Return(func(ctx context.Context, podsToDelete []*corev1.Pod) error {
+				Expect(podsToDelete).To(HaveLen(1))
+				Expect(podsToDelete[0]).To(Equal(orphanedPod))
+				return nil
+			})
+		stateManager.PodManager = &podManagerMock
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+	})
+	It("UpgradeStateManager should not move to UncordonRequired state "+
+		"if it's in UpgradeFailed, and Orphaned Pod", func() {
+		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+		pod := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase:             "Running",
+				ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+			},
+		}
+		upgradeFailedNode := NewNode("upgrade-failed-node").WithUpgradeState(upgrade.UpgradeStateFailed).Create()
+
+		clusterState := upgrade.NewClusterUpgradeState()
+		clusterState.NodeStates[upgrade.UpgradeStateFailed] = []*upgrade.NodeUpgradeState{
+			{
+				Node:            upgradeFailedNode,
+				DriverPod:       pod,
+				DriverDaemonSet: daemonSet,
+			},
+		}
+
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+		}
+
+		Expect(stateManager.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateFailed))
+	})
+
 })
 
 func nodeWithUpgradeState(state string) *corev1.Node {

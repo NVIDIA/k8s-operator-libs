@@ -31,6 +31,9 @@ const (
 	UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-wait-for-pod-completion-start-time"
 	// UpgradeValidationStartTimeAnnotationKeyFmt is the format of the node annotation indicating start time for validation-required state
 	UpgradeValidationStartTimeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-validation-start-time"
+	// UpgradeRequestedAnnotationKeyFmt is the format of the node label key indicating driver upgrade was requested (used for orphaned pods)
+	// Setting this label will trigger setting upgrade state to upgrade-required
+	UpgradeRequestedAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requested"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade

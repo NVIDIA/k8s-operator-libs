@@ -107,6 +107,11 @@ func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
 	return fmt.Sprintf(UpgradeWaitForSafeDriverLoadAnnotationKeyFmt, DriverName)
 }
 
+// GetUpgradeRequestedAnnotationKey returns the key for annotation used to mark node as driver upgrade is requested externally (orphaned pod)
+func GetUpgradeRequestedAnnotationKey() string {
+	return fmt.Sprintf(UpgradeRequestedAnnotationKeyFmt, DriverName)
+}
+
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
 func GetUpgradeInitialStateAnnotationKey() string {
 	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)

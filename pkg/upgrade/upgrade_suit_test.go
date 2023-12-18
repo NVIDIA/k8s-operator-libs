@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -244,6 +245,59 @@ func (n Node) Create() *corev1.Node {
 	return node
 }
 
+type DaemonSet struct {
+	*appsv1.DaemonSet
+
+	desiredNumberScheduled int32
+}
+
+func NewDaemonSet(name, namespace string, selector map[string]string) DaemonSet {
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: selector},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: selector,
+				},
+				Spec: corev1.PodSpec{
+					// fill in some required fields in the pod spec
+					Containers: []corev1.Container{
+						{Name: "foo", Image: "foo"},
+					},
+				},
+			},
+		},
+	}
+	return DaemonSet{ds, 0}
+}
+
+func (d DaemonSet) WithLabels(labels map[string]string) DaemonSet {
+	d.ObjectMeta.Labels = labels
+	return d
+}
+
+func (d DaemonSet) WithDesiredNumberScheduled(num int32) DaemonSet {
+	d.desiredNumberScheduled = num
+	return d
+}
+
+func (d DaemonSet) Create() *appsv1.DaemonSet {
+	ds := d.DaemonSet
+	err := k8sClient.Create(context.TODO(), ds)
+	Expect(err).NotTo(HaveOccurred())
+
+	// set Pod in Running state and mark Container as Ready
+	ds.Status.DesiredNumberScheduled = d.desiredNumberScheduled
+	err = k8sClient.Status().Update(context.TODO(), ds)
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, ds)
+	return ds
+}
+
 type Pod struct {
 	*corev1.Pod
 }
@@ -295,6 +349,11 @@ func (p Pod) WithResource(name, quantity string) Pod {
 			corev1.ResourceName(name): resourceQuantity,
 		},
 	}
+	return p
+}
+
+func (p Pod) WithOwnerReference(ownerRef metav1.OwnerReference) Pod {
+	p.OwnerReferences = append(p.OwnerReferences, ownerRef)
 	return p
 }
 
