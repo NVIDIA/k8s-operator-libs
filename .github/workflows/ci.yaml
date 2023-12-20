@@ -1,0 +1,9 @@
+name: hello-world
+on: [push, pull_request]
+
+jobs:
+  hello:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: say-hello
+      run: echo "Hello World!"
