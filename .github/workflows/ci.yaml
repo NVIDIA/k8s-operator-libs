@@ -1,9 +1,104 @@
-name: hello-world
+# Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "CI"
 on: [push, pull_request]
 
 jobs:
-  hello:
+  build-dev-image:
     runs-on: ubuntu-22.04
+    env:
+      IMAGE: build-image
+      IMAGE_TAG: "${{ github.sha }}"
+      BUILDIMAGE: "build-image:${{ github.sha }}"
+      BUILDIMAGE_ARTIFACT: "build-image.tar.gz"
     steps:
-    - name: say-hello
-      run: echo "Hello World!"
+    - uses: actions/checkout@v4
+    - name: build-dev-image
+      run: make .build-image
+    - name: export-image-to-targz
+      run: docker save ${BUILDIMAGE} | gzip > /tmp/${BUILDIMAGE_ARTIFACT}
+    - name: upload-image
+      uses: actions/upload-artifact@v4
+      with:
+        name: image
+        path: /tmp/${{ env.BUILDIMAGE_ARTIFACT }}
+        retention-days: 1
+    - name: return-image-name
+      id: return-image-name
+      run: |
+        echo "image=${BUILDIMAGE}" >> "$GITHUB_OUTPUT"
+        echo "imageArtifact=${BUILDIMAGE_ARTIFACT}" >> "$GITHUB_OUTPUT"
+    outputs:
+      image: ${{ steps.return-image-name.outputs.image }}
+      imageArtifact: ${{ steps.return-image-name.outputs.imageArtifact }}
+  go-checks:
+    needs: build-dev-image
+    runs-on: ubuntu-22.04
+    env:
+      IMAGE: ${{needs.build-dev-image.outputs.image}}
+      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
+    steps:
+    - name: download-image
+      uses: actions/download-artifact@v4
+      with:
+        name: image
+        path: /tmp
+    - name: load-image
+      run: docker load -i /tmp/${IMAGE_ARTIFACT}
+    - uses: actions/checkout@v4
+    - name: fmt
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make assert-fmt
+    - name: vet
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make vet
+    - name: lint
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make lint
+    - name: ineffassign
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make ineffassign
+    - name: misspell
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make misspell
+  go-build:
+    needs: build-dev-image
+    runs-on: ubuntu-22.04
+    env:
+      IMAGE: ${{needs.build-dev-image.outputs.image}}
+      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
+    steps:
+    - name: download-image
+      uses: actions/download-artifact@v4
+      with:
+        name: image
+        path: /tmp
+    - name: load-image
+      run: docker load -i /tmp/${IMAGE_ARTIFACT}
+    - uses: actions/checkout@v4
+    - name: build
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make build
+  unit-tests:
+    needs: build-dev-image
+    runs-on: ubuntu-22.04
+    env:
+      IMAGE: ${{needs.build-dev-image.outputs.image}}
+      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
+    steps:
+    - name: download-image
+      uses: actions/download-artifact@v4
+      with:
+        name: image
+        path: /tmp
+    - name: load-image
+      run: docker load -i /tmp/${IMAGE_ARTIFACT}
+    - uses: actions/checkout@v4
+    - name: unit-tests
+      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make test
