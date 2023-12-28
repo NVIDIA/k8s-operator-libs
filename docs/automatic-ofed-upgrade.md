@@ -23,8 +23,6 @@ spec:
       # maxParallelUpgrades indicates how many nodes can be upgraded in parallel
       # 0 means no limit, all nodes will be upgraded in parallel
       maxParallelUpgrades: 0
-      # cordon and drain (if enabled) a node before loading the driver on it
-      safeLoad: false
       # describes configuration for node drain during automatic upgrade
       drain:
         # allow node draining during upgrade
@@ -44,8 +42,6 @@ spec:
 
 ### Safe driver loading
 
-The state of the feature can be controlled with `driver.upgradePolicy.safeLoad` option.
-
 On Node startup, the containerized driver takes time to compile and load.
 During that time, workloads might get scheduled on that Node.
 When the driver is eventually loaded, all existing PODs using resources managed by the driver will lose access to them.
@@ -58,6 +54,16 @@ The safe driver loading feature is implemented as a part of the upgrade flow,
 meaning safe driver loading is a special scenario of the upgrade procedure, 
 where we upgrade from the inbox driver (driver which is installed on the host) to the containerized driver.
 
+The default safe load implementation in the library assumes two-step driver loading procedure.
+As a first step, the driver pod should load the [init container](https://github.com/Mellanox/network-operator-init-container),
+which will set "safe driver load annotation" (`nvidia.com/<driver-name>-driver-upgrade.driver-wait-for-safe-load`)
+on the node object, then the container blocks until the upgrade library removes the annotation from the node object.
+When the init container completes successfully (when the annotation was removed from the Node object),
+the driver Pod will proceed to the second step and do the driver loading.
+After that, the upgrade library will wait for the driver to become ready and then Uncordon the node if required.
+
+There is no need to enable the safe driver load feature in the upgrade library explicitly.
+The feature will automatically kick in if "safe driver load annotation" is present on the Node object.
 
 ### Details
 #### Node upgrade states
