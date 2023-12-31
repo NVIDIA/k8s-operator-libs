@@ -166,10 +166,12 @@ func (m *ClusterUpgradeStateManagerImpl) WithValidationEnabled(podSelector strin
 	return m
 }
 
+// IsPodDeletionEnabled returns true if 'pod-deletion' state is enabled
 func (m *ClusterUpgradeStateManagerImpl) IsPodDeletionEnabled() bool {
 	return m.podDeletionStateEnabled
 }
 
+// IsValidationEnabled returns true if 'validation' state is enabled
 func (m *ClusterUpgradeStateManagerImpl) IsValidationEnabled() bool {
 	return m.validationStateEnabled
 }
@@ -195,6 +197,7 @@ func (m *ClusterUpgradeStateManagerImpl) GetCurrentUnavailableNodes(ctx context.
 	return unavailableNodes
 }
 
+// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error) {
 	m.Log.V(consts.LogLevelInfo).Info("Building state")
 

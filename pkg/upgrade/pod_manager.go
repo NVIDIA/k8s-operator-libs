@@ -68,16 +68,19 @@ type PodManagerConfig struct {
 }
 
 const (
+	// PodControllerRevisionHashLabelKey is the label key containing the controller-revision-hash
 	PodControllerRevisionHashLabelKey = "controller-revision-hash"
 )
 
 // PodDeletionFilter takes a pod and returns a boolean indicating whether the pod should be deleted
 type PodDeletionFilter func(corev1.Pod) bool
 
+// GetPodDeletionFilter returns the PodDeletionFilter
 func (m *PodManagerImpl) GetPodDeletionFilter() PodDeletionFilter {
 	return m.podDeletionFilter
 }
 
+// GetPodControllerRevisionHash returns the Pod Controller Revision Hash from its labels
 func (m *PodManagerImpl) GetPodControllerRevisionHash(ctx context.Context, pod *corev1.Pod) (string, error) {
 	if hash, ok := pod.Labels[PodControllerRevisionHashLabelKey]; ok {
 		return hash, nil
@@ -85,6 +88,7 @@ func (m *PodManagerImpl) GetPodControllerRevisionHash(ctx context.Context, pod *
 	return "", fmt.Errorf("controller-revision-hash label not present for pod %s", pod.Name)
 }
 
+// GetDaemonsetControllerRevisionHash returns the latest DaemonSet Controller Revision Hash
 func (m *PodManagerImpl) GetDaemonsetControllerRevisionHash(ctx context.Context, daemonset *appsv1.DaemonSet) (string, error) {
 	// get all revisions for the daemonset
 	listOptions := meta_v1.ListOptions{LabelSelector: labels.SelectorFromSet(daemonset.Spec.Selector.MatchLabels).String()}
@@ -172,7 +176,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 				numPodsToDelete := 0
 				for _, pod := range podList.Items {
 					if m.podDeletionFilter(pod) == true {
-						numPodsToDelete += 1
+						numPodsToDelete++
 					}
 				}
 

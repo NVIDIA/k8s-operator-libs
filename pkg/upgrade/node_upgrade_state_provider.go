@@ -36,6 +36,7 @@ type NodeUpgradeStateProvider interface {
 	ChangeNodeUpgradeAnnotation(ctx context.Context, node *corev1.Node, key string, value string) error
 }
 
+// NodeUpgradeStateProviderImpl implements the NodeUpgradeStateProvider interface
 type NodeUpgradeStateProviderImpl struct {
 	K8sClient     client.Client
 	Log           logr.Logger
@@ -43,6 +44,7 @@ type NodeUpgradeStateProviderImpl struct {
 	eventRecorder record.EventRecorder
 }
 
+// NewNodeUpgradeStateProvider creates a NodeUpgradeStateProviderImpl
 func NewNodeUpgradeStateProvider(k8sClient client.Client, log logr.Logger, eventRecorder record.EventRecorder) NodeUpgradeStateProvider {
 	return &NodeUpgradeStateProviderImpl{
 		K8sClient:     k8sClient,
@@ -52,6 +54,7 @@ func NewNodeUpgradeStateProvider(k8sClient client.Client, log logr.Logger, event
 	}
 }
 
+// GetNode returns a corev1.Node according to name
 func (p *NodeUpgradeStateProviderImpl) GetNode(ctx context.Context, nodeName string) (*corev1.Node, error) {
 	defer p.nodeMutex.Lock(nodeName)()
 
@@ -125,6 +128,8 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeState(
 	return err
 }
 
+// ChangeNodeUpgradeAnnotation patches a given corev1.Node object and updates an annotation with a given value
+// The function then waits for the operator cache to get updated
 func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 	ctx context.Context, node *corev1.Node, key string, value string) error {
 	p.Log.V(consts.LogLevelInfo).Info("Updating node upgrade annotation",

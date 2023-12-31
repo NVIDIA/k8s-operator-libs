@@ -135,6 +135,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 	return nil
 }
 
+// NewDrainManager creates a DrainManager
 func NewDrainManager(
 	k8sInterface kubernetes.Interface,
 	nodeUpgradeStateProvider NodeUpgradeStateProvider,
