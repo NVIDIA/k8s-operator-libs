@@ -107,4 +107,5 @@ type DrainSpec struct {
 	DeleteEmptyDir bool `json:"deleteEmptyDir,omitempty"`
 }
 
+// GetObjectKind return ObjectKind
 func (obj *DriverUpgradePolicySpec) GetObjectKind() schema.ObjectKind { return nil }

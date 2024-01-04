@@ -22,11 +22,13 @@ import (
 	"k8s.io/client-go/tools/record"
 )
 
+// StringSet implements a thread safe Set of Strings
 type StringSet struct {
 	m  map[string]bool
 	mu sync.RWMutex
 }
 
+// NewStringSet creates a StringSet
 func NewStringSet() *StringSet {
 	return &StringSet{
 		m:  make(map[string]bool),
@@ -68,6 +70,7 @@ type KeyedMutex struct {
 	mutexes sync.Map // Zero value is empty and ready for use
 }
 
+// UnlockFunc is a function that release a lock
 type UnlockFunc = func()
 
 // Lock locks a mutex, associated with a given key and returns an unlock function
@@ -114,7 +117,7 @@ func GetWaitForPodCompletionStartTimeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt, DriverName)
 }
 
-// GetValidationTimeoutAnnotationKey returns the key for annotation indicating start time for validation-required state
+// GetValidationStartTimeAnnotationKey returns the key for annotation indicating start time for validation-required state
 func GetValidationStartTimeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeValidationStartTimeAnnotationKeyFmt, DriverName)
 }
