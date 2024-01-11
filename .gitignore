@@ -3,3 +3,4 @@
 *.test
 testbin/
 cover.out
+.idea
