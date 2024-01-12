@@ -16,89 +16,50 @@ name: "CI"
 on: [push, pull_request]
 
 jobs:
-  build-dev-image:
+  lint:
     runs-on: ubuntu-22.04
-    env:
-      IMAGE: build-image
-      IMAGE_TAG: "${{ github.sha }}"
-      BUILDIMAGE: "build-image:${{ github.sha }}"
-      BUILDIMAGE_ARTIFACT: "build-image.tar.gz"
     steps:
-    - uses: actions/checkout@v4
-    - name: build-dev-image
-      run: make .build-image
-    - name: export-image-to-targz
-      run: docker save ${BUILDIMAGE} | gzip > /tmp/${BUILDIMAGE_ARTIFACT}
-    - name: upload-image
-      uses: actions/upload-artifact@v4
-      with:
-        name: image
-        path: /tmp/${{ env.BUILDIMAGE_ARTIFACT }}
-        retention-days: 1
-    - name: return-image-name
-      id: return-image-name
-      run: |
-        echo "image=${BUILDIMAGE}" >> "$GITHUB_OUTPUT"
-        echo "imageArtifact=${BUILDIMAGE_ARTIFACT}" >> "$GITHUB_OUTPUT"
-    outputs:
-      image: ${{ steps.return-image-name.outputs.image }}
-      imageArtifact: ${{ steps.return-image-name.outputs.imageArtifact }}
-  go-checks:
-    needs: build-dev-image
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.20.x
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v4
+      - name: Lint
+        run: make lint
+  test:
     runs-on: ubuntu-22.04
-    env:
-      IMAGE: ${{needs.build-dev-image.outputs.image}}
-      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
     steps:
-    - name: download-image
-      uses: actions/download-artifact@v4
-      with:
-        name: image
-        path: /tmp
-    - name: load-image
-      run: docker load -i /tmp/${IMAGE_ARTIFACT}
-    - uses: actions/checkout@v4
-    - name: fmt
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make assert-fmt
-    - name: vet
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make vet
-    - name: lint
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make lint
-    - name: ineffassign
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make ineffassign
-    - name: misspell
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make misspell
-  go-build:
-    needs: build-dev-image
-    runs-on: ubuntu-22.04
-    env:
-      IMAGE: ${{needs.build-dev-image.outputs.image}}
-      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.20.x
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: make test
+  go-check:
+    runs-on: ubuntu-latest
     steps:
-    - name: download-image
-      uses: actions/download-artifact@v4
-      with:
-        name: image
-        path: /tmp
-    - name: load-image
-      run: docker load -i /tmp/${IMAGE_ARTIFACT}
-    - uses: actions/checkout@v4
-    - name: build
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make build
-  unit-tests:
-    needs: build-dev-image
-    runs-on: ubuntu-22.04
-    env:
-      IMAGE: ${{needs.build-dev-image.outputs.image}}
-      IMAGE_ARTIFACT: ${{needs.build-dev-image.outputs.imageArtifact}}
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.20.x
+      - name: Run go checks
+        run: make go-check
+  coverage:
+    runs-on: ubuntu-latest
     steps:
-    - name: download-image
-      uses: actions/download-artifact@v4
-      with:
-        name: image
-        path: /tmp
-    - name: load-image
-      run: docker load -i /tmp/${IMAGE_ARTIFACT}
-    - uses: actions/checkout@v4
-    - name: unit-tests
-      run: docker run -v ${{ github.workspace}}:/tmp/repo -w /tmp/repo --rm ${IMAGE} make test
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.20.x
+      - name: Generate coverage report
+        run: make cov-report
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.info

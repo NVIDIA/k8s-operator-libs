@@ -4,3 +4,5 @@
 testbin/
 cover.out
 .idea
+bin/
+lcov.info

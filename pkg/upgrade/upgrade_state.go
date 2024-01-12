@@ -62,6 +62,8 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 }
 
 // ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
+//
+//nolint:interfacebloat
 type ClusterUpgradeStateManager interface {
 	// ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
 	// Based on the current state of the node, it is calculated if the node can be moved to the next state right now
@@ -122,7 +124,6 @@ func NewClusterUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder) (ClusterUpgradeStateManager, error) {
-
 	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		return nil, fmt.Errorf("error creating k8s client: %v", err)
@@ -149,7 +150,8 @@ func NewClusterUpgradeStateManager(
 	return manager, nil
 }
 
-// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom PodDeletionFilter to use
+// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom
+// PodDeletionFilter to use
 func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeletionFilter) ClusterUpgradeStateManager {
 	if filter == nil {
 		m.Log.V(consts.LogLevelWarning).Info("Cannot enable PodDeletion state as PodDeletionFilter is nil")
@@ -160,13 +162,15 @@ func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeleti
 	return m
 }
 
-// WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify which pods are performing the validation
+// WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify
+// which pods are performing the validation
 func (m *ClusterUpgradeStateManagerImpl) WithValidationEnabled(podSelector string) ClusterUpgradeStateManager {
 	if podSelector == "" {
 		m.Log.V(consts.LogLevelWarning).Info("Cannot enable Validation state as podSelector is empty")
 		return m
 	}
-	m.ValidationManager = NewValidationManager(m.K8sInterface, m.Log, m.EventRecorder, m.NodeUpgradeStateProvider, podSelector)
+	m.ValidationManager = NewValidationManager(m.K8sInterface, m.Log, m.EventRecorder, m.NodeUpgradeStateProvider,
+		podSelector)
 	m.validationStateEnabled = true
 	return m
 }
@@ -182,7 +186,11 @@ func (m *ClusterUpgradeStateManagerImpl) IsValidationEnabled() bool {
 }
 
 // GetCurrentUnavailableNodes returns all nodes that are not in ready state
-func (m *ClusterUpgradeStateManagerImpl) GetCurrentUnavailableNodes(ctx context.Context, currentState *ClusterUpgradeState) int {
+// TODO: Drop ctx as it's not used
+//
+//nolint:revive
+func (m *ClusterUpgradeStateManagerImpl) GetCurrentUnavailableNodes(ctx context.Context,
+	currentState *ClusterUpgradeState) int {
 	unavailableNodes := 0
 	for _, nodeUpgradeStateList := range currentState.NodeStates {
 		for _, nodeUpgradeState := range nodeUpgradeStateList {
@@ -203,7 +211,8 @@ func (m *ClusterUpgradeStateManagerImpl) GetCurrentUnavailableNodes(ctx context.
 }
 
 // BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
-func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error) {
+func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespace string,
+	driverLabels map[string]string) (*ClusterUpgradeState, error) {
 	m.Log.V(consts.LogLevelInfo).Info("Building state")
 
 	upgradeState := NewClusterUpgradeState()
@@ -233,7 +242,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 		dsPods := m.getPodsOwnedbyDs(ds, podList.Items)
 		if int(ds.Status.DesiredNumberScheduled) != len(dsPods) {
 			m.Log.V(consts.LogLevelInfo).Info("Driver DaemonSet has Unscheduled pods", "name", ds.Name)
-			return nil, fmt.Errorf("Driver DaemonSet should not have Unscheduled pods")
+			return nil, fmt.Errorf("driver DaemonSet should not have Unscheduled pods")
 		}
 		filteredPodList = append(filteredPodList, dsPods...)
 	}
@@ -286,7 +295,8 @@ func (m *ClusterUpgradeStateManagerImpl) buildNodeUpgradeState(
 }
 
 // getDriverDaemonSets retrieves DaemonSets with given labels and returns UID->DaemonSet map
-func (m *ClusterUpgradeStateManagerImpl) getDriverDaemonSets(ctx context.Context, namespace string, labels map[string]string) (map[types.UID]*appsv1.DaemonSet, error) {
+func (m *ClusterUpgradeStateManagerImpl) getDriverDaemonSets(ctx context.Context, namespace string,
+	labels map[string]string) (map[types.UID]*appsv1.DaemonSet, error) {
 	// Get list of driver pods
 	daemonSetList := &appsv1.DaemonSetList{}
 
@@ -349,6 +359,8 @@ func isOrphanedPod(pod *corev1.Pod) bool {
 // or whether any actions need to be scheduled for the node to move to the next state.
 // The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
 // ApplyState would be called again and complete the processing - all the decisions are based on the input data.
+//
+//nolint:funlen
 func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error) {
 	m.Log.V(consts.LogLevelInfo).Info("State Manager, got state update")
@@ -399,7 +411,9 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		"maximum nodes that can be unavailable", maxUnavailable)
 
 	// Determine the object to log this event
-	// m.EventRecorder.Eventf(m.Namespace, v1.EventTypeNormal, GetEventReason(), "InProgress: %d, MaxParallelUpgrades: %d, UpgradeSlotsAvailable: %s", upgradesInProgress, upgradePolicy.MaxParallelUpgrades, upgradesAvailable)
+	// m.EventRecorder.Eventf(m.Namespace, v1.EventTypeNormal, GetEventReason(),
+	// "InProgress: %d, MaxParallelUpgrades: %d, UpgradeSlotsAvailable: %s", upgradesInProgress,
+	// upgradePolicy.MaxParallelUpgrades, upgradesAvailable)
 
 	// First, check if unknown or ready nodes need to be upgraded
 	err = m.ProcessDoneOrUnknownNodes(ctx, currentState, UpgradeStateUnknown)
@@ -432,7 +446,7 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return err
 	}
 
-	drainEnabled := upgradePolicy.DrainSpec != nil && upgradePolicy.DrainSpec.Enable == true
+	drainEnabled := upgradePolicy.DrainSpec != nil && upgradePolicy.DrainSpec.Enable
 	err = m.ProcessPodDeletionRequiredNodes(ctx, currentState, upgradePolicy.PodDeletion, drainEnabled)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed to delete pods")
@@ -497,10 +511,12 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessDoneOrUnknownNodes(
 			// annotation and leave node in Unschedulable state when upgrade completes.
 			if isNodeUnschedulable(nodeState.Node) {
 				annotationKey := GetUpgradeInitialStateAnnotationKey()
-				annotationValue := "true"
-				m.Log.V(consts.LogLevelInfo).Info("Node is unschedulable, adding annotation to track initial state of the node",
+				annotationValue := trueString
+				m.Log.V(consts.LogLevelInfo).Info(
+					"Node is unschedulable, adding annotation to track initial state of the node",
 					"node", nodeState.Node.Name, "annotation", annotationKey)
-				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, annotationValue)
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey,
+					annotationValue)
 				if err != nil {
 					return err
 				}
@@ -539,7 +555,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessDoneOrUnknownNodes(
 //	bool: True if Pod is in sync with DaemonSet. (For Orphanded Pods, always false)
 //	bool: True if the Pod is Orphaned
 //	error: In case of error retrivieng the Revision Hashes
-func (m *ClusterUpgradeStateManagerImpl) podInSyncWithDS(ctx context.Context, nodeState *NodeUpgradeState) (bool, bool, error) {
+func (m *ClusterUpgradeStateManagerImpl) podInSyncWithDS(ctx context.Context,
+	nodeState *NodeUpgradeState) (bool, bool, error) {
 	if nodeState.IsOrphanedPod() {
 		return false, true, nil
 	}
@@ -560,13 +577,13 @@ func (m *ClusterUpgradeStateManagerImpl) podInSyncWithDS(ctx context.Context, no
 	return podRevisionHash == daemonsetRevisionHash, false, nil
 }
 
-// isUpgradeRequested returns true if node is labelled to request an upgrade
+// isUpgradeRequested returns true if node is labeled to request an upgrade
 func (m *ClusterUpgradeStateManagerImpl) isUpgradeRequested(node *corev1.Node) bool {
 	return node.Annotations[GetUpgradeRequestedAnnotationKey()] == "true"
 }
 
-// ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired until
-// the limit on max parallel upgrades is reached.
+// ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
+// until the limit on max parallel upgrades is reached.
 func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState, upgradesAvailable int) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeRequiredNodes")
@@ -589,9 +606,11 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodes(
 		if upgradesAvailable <= 0 {
 			// when no new node upgrades are available, progess with manually cordoned nodes
 			if m.isNodeUnschedulable(nodeState.Node) {
-				m.Log.V(consts.LogLevelDebug).Info("Node is already cordoned, progressing for driver upgrade", "node", nodeState.Node.Name)
+				m.Log.V(consts.LogLevelDebug).Info("Node is already cordoned, progressing for driver upgrade",
+					"node", nodeState.Node.Name)
 			} else {
-				m.Log.V(consts.LogLevelDebug).Info("Node upgrade limit reached, pausing further upgrades", "node", nodeState.Node.Name)
+				m.Log.V(consts.LogLevelDebug).Info("Node upgrade limit reached, pausing further upgrades",
+					"node", nodeState.Node.Name)
 				continue
 			}
 		}
@@ -637,10 +656,11 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessCordonRequiredNodes(
 // ProcessWaitForJobsRequiredNodes processes UpgradeStateWaitForJobsRequired nodes,
 // waits for completion of jobs and moves them to UpgradeStatePodDeletionRequired state.
 func (m *ClusterUpgradeStateManagerImpl) ProcessWaitForJobsRequiredNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, waitForCompletionSpec *v1alpha1.WaitForCompletionSpec) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState,
+	waitForCompletionSpec *v1alpha1.WaitForCompletionSpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessWaitForJobsRequiredNodes")
 
-	var nodes []*corev1.Node
+	nodes := make([]*corev1.Node, 0, len(currentClusterState.NodeStates[UpgradeStateWaitForJobsRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateWaitForJobsRequired] {
 		nodes = append(nodes, nodeState.Node)
 		if waitForCompletionSpec == nil || waitForCompletionSpec.PodSelector == "" {
@@ -676,7 +696,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessWaitForJobsRequiredNodes(
 // deletes select pods on a node, and moves the nodes to UpgradeStateDrainRequiredRequired state.
 // Pods selected for deletion are determined via PodManager.PodDeletion
 func (m *ClusterUpgradeStateManagerImpl) ProcessPodDeletionRequiredNodes(
-	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *v1alpha1.PodDeletionSpec, drainEnabled bool) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState, podDeletionSpec *v1alpha1.PodDeletionSpec,
+	drainEnabled bool) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessPodDeletionRequiredNodes")
 
 	if !m.IsPodDeletionEnabled() {
@@ -714,7 +735,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessDrainNodes(
 		// If node drain is disabled, move nodes straight to PodRestart stage
 		m.Log.V(consts.LogLevelInfo).Info("Node drain is disabled by policy, skipping this step")
 		for _, nodeState := range currentClusterState.NodeStates[UpgradeStateDrainRequired] {
-			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStatePodRestartRequired)
+			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
+				UpgradeStatePodRestartRequired)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to change node upgrade state", "state", UpgradeStatePodRestartRequired)
@@ -779,7 +801,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessPodRestartNodes(
 					continue
 				}
 
-				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateValidationRequired)
+				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
+					UpgradeStateValidationRequired)
 				if err != nil {
 					m.Log.V(consts.LogLevelError).Error(
 						err, "Failed to change node upgrade state", "state", UpgradeStateValidationRequired)
@@ -795,7 +818,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessPodRestartNodes(
 				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateFailed)
 				if err != nil {
 					m.Log.V(consts.LogLevelError).Error(
-						err, "Failed to change node upgrade state for node", "node", nodeState.Node.Name, "state", UpgradeStateFailed)
+						err, "Failed to change node upgrade state for node", "node", nodeState.Node.Name,
+						"state", UpgradeStateFailed)
 					return err
 				}
 			}
@@ -909,7 +933,8 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodes(
 	return nil
 }
 
-func (m *ClusterUpgradeStateManagerImpl) isDriverPodInSync(ctx context.Context, nodeState *NodeUpgradeState) (bool, error) {
+func (m *ClusterUpgradeStateManagerImpl) isDriverPodInSync(ctx context.Context,
+	nodeState *NodeUpgradeState) (bool, error) {
 	isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
@@ -921,7 +946,7 @@ func (m *ClusterUpgradeStateManagerImpl) isDriverPodInSync(ctx context.Context, 
 	// If the pod generation matches the daemonset generation
 	if isPodSynced &&
 		// And the pod is running
-		nodeState.DriverPod.Status.Phase == "Running" &&
+		nodeState.DriverPod.Status.Phase == corev1.PodRunning &&
 		// And it has at least 1 container
 		len(nodeState.DriverPod.Status.ContainerStatuses) != 0 {
 		for i := range nodeState.DriverPod.Status.ContainerStatuses {
@@ -967,17 +992,14 @@ func (m *ClusterUpgradeStateManagerImpl) isNodeConditionReady(node *corev1.Node)
 	return true
 }
 
-// skipNodeUpgrade returns true if node is labelled to skip driver upgrades
+// skipNodeUpgrade returns true if node is labeled to skip driver upgrades
 func (m *ClusterUpgradeStateManagerImpl) skipNodeUpgrade(node *corev1.Node) bool {
-	if node.Labels[GetUpgradeSkipNodeLabelKey()] == "true" {
-		return true
-	}
-	return false
+	return node.Labels[GetUpgradeSkipNodeLabelKey()] == trueString
 }
 
 // updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
 // was Unschedulable at the beginning of the upgrade so that the node remains in the same state as
-// when the ugprade started. In addition, the annotation tracking this information is removed.
+// when the upgrade started. In addition, the annotation tracking this information is removed.
 func (m *ClusterUpgradeStateManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context, node *corev1.Node) error {
 	newUpgradeState := UpgradeStateUncordonRequired
 	annotationKey := GetUpgradeInitialStateAnnotationKey()
@@ -1006,13 +1028,13 @@ func (m *ClusterUpgradeStateManagerImpl) updateNodeToUncordonOrDoneState(ctx con
 }
 
 func isNodeUnschedulable(node *corev1.Node) bool {
-	if node.Spec.Unschedulable {
-		return true
-	}
-	return false
+	return node.Spec.Unschedulable
 }
 
 // GetTotalManagedNodes returns the total count of nodes managed for driver upgrades
+// TODO: Drop ctx as it's not used
+//
+//nolint:revive
 func (m *ClusterUpgradeStateManagerImpl) GetTotalManagedNodes(ctx context.Context,
 	currentState *ClusterUpgradeState) int {
 	totalNodes := len(currentState.NodeStates[UpgradeStateUnknown]) +
@@ -1040,6 +1062,9 @@ func (m *ClusterUpgradeStateManagerImpl) GetUpgradesInProgress(ctx context.Conte
 }
 
 // GetUpgradesDone returns count of nodes on which upgrade is complete
+// TODO: Drop ctx as it's not used
+//
+//nolint:revive
 func (m *ClusterUpgradeStateManagerImpl) GetUpgradesDone(ctx context.Context,
 	currentState *ClusterUpgradeState) int {
 	return len(currentState.NodeStates[UpgradeStateDone])
@@ -1061,7 +1086,8 @@ func (m *ClusterUpgradeStateManagerImpl) GetUpgradesAvailable(ctx context.Contex
 
 	// Apply the maxUnavailable constraint based on the number of nodes unavailable in the cluster
 	// Get nodes in cordoned/not-ready state and also include nodes that are about to be cordoned.
-	currentUnavailableNodes := m.GetCurrentUnavailableNodes(ctx, currentState) + len(currentState.NodeStates[UpgradeStateCordonRequired])
+	currentUnavailableNodes := m.GetCurrentUnavailableNodes(ctx, currentState) +
+		len(currentState.NodeStates[UpgradeStateCordonRequired])
 	// always limit upgradesAvailalbe to maxUnavailable
 	if upgradesAvailable > maxUnavailable {
 		upgradesAvailable = maxUnavailable
@@ -1076,12 +1102,18 @@ func (m *ClusterUpgradeStateManagerImpl) GetUpgradesAvailable(ctx context.Contex
 }
 
 // GetUpgradesFailed returns count of nodes on which upgrades have failed
+// TODO: Drop ctx as it's not used
+//
+//nolint:revive
 func (m *ClusterUpgradeStateManagerImpl) GetUpgradesFailed(ctx context.Context,
 	currentState *ClusterUpgradeState) int {
 	return len(currentState.NodeStates[UpgradeStateFailed])
 }
 
 // GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
+// TODO: Drop ctx as it's not used
+//
+//nolint:revive
 func (m *ClusterUpgradeStateManagerImpl) GetUpgradesPending(ctx context.Context,
 	currentState *ClusterUpgradeState) int {
 	return len(currentState.NodeStates[UpgradeStateUpgradeRequired])

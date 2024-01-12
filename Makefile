@@ -27,15 +27,23 @@ BUILDIMAGE ?= $(IMAGE):$(IMAGE_TAG)-devel
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.24.2
+ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
 
-CHECK_TARGETS := assert-fmt vet lint ineffassign misspell
-TARGETS := binary build all check fmt generate test $(CHECK_TARGETS)
+TARGETS := all check lint go-check generate test cov-report controller-gen golangci-lint gcov2lcov
 DOCKER_TARGETS := $(patsubst %, docker-%, $(TARGETS))
 .PHONY: $(TARGETS) $(DOCKER_TARGETS)
 
 GOOS := linux
 
+# Tools
 TOOLSDIR=$(CURDIR)/bin
+
+GOLANGCILINT ?= $(TOOLSDIR)/golangci-lint
+CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
+GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
+GOLANGCILINT_VERSION ?= v1.52.2
+CONTROLLER_GEN_VERSION ?= v0.10.0
+GCOV2LCOV_VERSION ?= v1.0.5
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -50,58 +58,37 @@ endif
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
-build:
-	GOOS=$(GOOS) go build ./...
+all: generate check test cov-report ## Generate code, run checks and tests
 
-all: check build binary
-check: $(CHECK_TARGETS)
+check: lint go-check ## Run linters and go checks
 
-# Apply go fmt to the codebase
-fmt:
-	go list -f '{{.Dir}}' $(MODULE)/... \
-		| xargs gofmt -s -l -w
+lint: golangci-lint ## Lint code
+	$(GOLANGCILINT) run --timeout 10m
 
-assert-fmt:
-	go list -f '{{.Dir}}' $(MODULE)/... \
-		| xargs gofmt -s -l > fmt.out
-	@if [ -s fmt.out ]; then \
-		echo "\nERROR: The following files are not formatted:\n"; \
-		cat fmt.out; \
-		rm fmt.out; \
-		exit 1; \
-	else \
-		rm fmt.out; \
-	fi
-
-lint:
-	# We use `go list -f '{{.Dir}}' $(MODULE)/...` to skip the `vendor` folder.
-	go list -f '{{.Dir}}' $(MODULE)/... | xargs golint -set_exit_status
-
-vet:
-	go vet $(MODULE)/...
-
-ineffassign:
-	ineffassign $(MODULE)/...
-
-misspell:
-	misspell $(MODULE)/...
+go-check: ## Run go checks to ensure modules are synced
+	go mod tidy && git diff --exit-code
 
 generate: controller-gen ## Generate code
 	$(CONTROLLER_GEN) object object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-
-test-gen:
 	go generate $(MODULE)/...
 
-ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
-test: test-gen vet; $(info  running $(NAME:%=% )tests...) @ ## Run tests
+test: generate; $(info  running $(NAME:%=% )tests...) @ ## Run tests
 	mkdir -p ${ENVTEST_ASSETS_DIR}
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.0/hack/setup-envtest.sh
 	ENVTEST_K8S_VERSION=${ENVTEST_K8S_VERSION}; . ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; \
 	fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
 
-CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
+cov-report: gcov2lcov test ## Build test coverage report in lcov format
+	$(GCOV2LCOV) -infile cover.out -outfile lcov.info
+
 controller-gen:	## Download controller-gen locally if necessary
-	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.10.0)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION))
+
+golangci-lint: ## Download golangci-lint locally if necessary.
+	$(call go-install-tool,$(GOLANGCILINT),github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCILINT_VERSION))
+
+gcov2lcov: ## Download gcov2lcov locally if necessary.
+	$(call go-install-tool,$(GCOV2LCOV),github.com/jandelgado/gcov2lcov@$(GCOV2LCOV_VERSION))
 
 # Generate an image for containerized builds
 # Note: This image is local only
@@ -122,11 +109,12 @@ controller-gen:	## Download controller-gen locally if necessary
 .push-build-image:
 	$(DOCKER) push $(BUILDIMAGE)
 
-$(DOCKER_TARGETS): docker-%: .build-image
+$(DOCKER_TARGETS): docker-%: .build-image ## Run command in docker
 	@echo "Running 'make $(*)' in docker container $(BUILDIMAGE)"
 	$(DOCKER) run \
 		--rm \
 		-e GOCACHE=/tmp/.cache \
+		-e GOLANGCI_LINT_CACHE=/tmp/.cache \
 		-e PROJECT_DIR=$(PWD) \
 		-v $(PWD):$(PWD) \
 		-w $(PWD) \
@@ -141,3 +129,8 @@ echo "Downloading $(2)" ;\
 GOBIN=$(TOOLSDIR) go install $(2) ;\
 }
 endef
+
+.PHONY: help
+help: ## Show this message
+	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

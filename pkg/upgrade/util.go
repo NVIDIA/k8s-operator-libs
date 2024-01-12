@@ -76,7 +76,10 @@ type UnlockFunc = func()
 // Lock locks a mutex, associated with a given key and returns an unlock function
 func (m *KeyedMutex) Lock(key string) UnlockFunc {
 	value, _ := m.mutexes.LoadOrStore(key, &sync.Mutex{})
-	mtx := value.(*sync.Mutex)
+	mtx, ok := value.(*sync.Mutex)
+	if !ok {
+		panic("object is not of type sync.Mutex which is what was expected")
+	}
 	mtx.Lock()
 	return func() { mtx.Unlock() }
 }
@@ -107,7 +110,8 @@ func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
 	return fmt.Sprintf(UpgradeWaitForSafeDriverLoadAnnotationKeyFmt, DriverName)
 }
 
-// GetUpgradeRequestedAnnotationKey returns the key for annotation used to mark node as driver upgrade is requested externally (orphaned pod)
+// GetUpgradeRequestedAnnotationKey returns the key for annotation used to mark node as driver upgrade is requested
+// externally (orphaned pod)
 func GetUpgradeRequestedAnnotationKey() string {
 	return fmt.Sprintf(UpgradeRequestedAnnotationKeyFmt, DriverName)
 }
@@ -117,12 +121,14 @@ func GetUpgradeInitialStateAnnotationKey() string {
 	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)
 }
 
-// GetWaitForPodCompletionStartTimeAnnotationKey returns the key for annotation used to track start time for waiting on pod/job completions
+// GetWaitForPodCompletionStartTimeAnnotationKey returns the key for annotation used to track start time for waiting on
+// pod/job completions
 func GetWaitForPodCompletionStartTimeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt, DriverName)
 }
 
-// GetValidationStartTimeAnnotationKey returns the key for annotation indicating start time for validation-required state
+// GetValidationStartTimeAnnotationKey returns the key for annotation indicating start time for validation-required
+// state
 func GetValidationStartTimeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeValidationStartTimeAnnotationKeyFmt, DriverName)
 }
@@ -132,13 +138,15 @@ func GetEventReason() string {
 	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
 }
 
-func logEventf(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string, args ...interface{}) {
+func logEventf(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string,
+	args ...interface{}) {
 	if recorder != nil {
-		recorder.Eventf(object, eventType, reason, messageFmt, args)
+		recorder.Eventf(object, eventType, reason, messageFmt, args, nil)
 	}
 }
 
-func logEvent(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string) {
+func logEvent(recorder record.EventRecorder, object runtime.Object, eventType string, reason string,
+	messageFmt string) {
 	if recorder != nil {
 		recorder.Event(object, eventType, reason, messageFmt)
 	}
