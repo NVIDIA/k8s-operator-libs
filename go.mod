@@ -1,7 +1,6 @@
 module github.com/NVIDIA/k8s-operator-libs
 
-go 1.21
-toolchain go1.22.4
+go 1.22.0
 
 require (
 	github.com/go-logr/logr v1.4.1
