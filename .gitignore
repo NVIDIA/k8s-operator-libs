@@ -6,3 +6,5 @@ cover.out
 .idea
 bin/
 lcov.info
+
+vendor/
