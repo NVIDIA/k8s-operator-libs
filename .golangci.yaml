@@ -92,6 +92,16 @@ linters:
     #- wsl
 
 linters-settings:
+  depguard:
+    rules:
+      main:
+        list-mode: original
+        allow:
+          - $gostd
+          - github.com/NVIDIA
+          - github.com/go-logr/logr
+          - k8s.io
+          - sigs.k8s.io
   dupl:
     threshold: 100
   funlen:

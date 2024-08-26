@@ -16,7 +16,7 @@ MODULE := github.com/NVIDIA/k8s-operator-libs
 
 DOCKER ?= docker
 
-GOLANG_VERSION := 1.21
+GOLANG_VERSION := 1.23
 
 ifeq ($(IMAGE),)
 REGISTRY ?= nvidia
@@ -41,9 +41,9 @@ TOOLSDIR=$(CURDIR)/bin
 GOLANGCILINT ?= $(TOOLSDIR)/golangci-lint
 CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
 GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
-GOLANGCILINT_VERSION ?= v1.52.2
-CONTROLLER_GEN_VERSION ?= v0.10.0
-GCOV2LCOV_VERSION ?= v1.0.5
+GOLANGCILINT_VERSION ?= v1.60.3
+CONTROLLER_GEN_VERSION ?= v0.16.1
+GCOV2LCOV_VERSION ?= v1.0.6
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -69,7 +69,7 @@ go-check: ## Run go checks to ensure modules are synced
 	go mod tidy && git diff --exit-code
 
 generate: controller-gen ## Generate code
-	$(CONTROLLER_GEN) object object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	go generate $(MODULE)/...
 
 test: generate; $(info  running $(NAME:%=% )tests...) @ ## Run tests
