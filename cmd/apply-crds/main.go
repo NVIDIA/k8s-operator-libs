@@ -28,6 +28,7 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	v1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -85,13 +86,13 @@ func Run() {
 		log.Fatalf("Failed to create API extensions client: %v", err)
 	}
 
-	if err := walkCrdsDir(ctx, client); err != nil {
+	if err := walkCrdsDir(ctx, client.ApiextensionsV1().CustomResourceDefinitions()); err != nil {
 		log.Fatalf("Failed to apply CRDs: %v", err)
 	}
 }
 
 // walkCrdsDir walks the CRDs directory and applies each YAML file.
-func walkCrdsDir(ctx context.Context, client *clientset.Clientset) error {
+func walkCrdsDir(ctx context.Context, crdClient v1.CustomResourceDefinitionInterface) error {
 	for _, crdDir := range crdsDir {
 		// Walk the directory recursively and apply each YAML file.
 		err := filepath.Walk(crdDir, func(path string, info os.FileInfo, err error) error {
@@ -103,23 +104,23 @@ func walkCrdsDir(ctx context.Context, client *clientset.Clientset) error {
 			}
 
 			log.Printf("Apply CRDs from file: %s", path)
-			if err := applyCRDsFromFile(ctx, client, path); err != nil {
-				return fmt.Errorf("apply CRD %s: %v", path, err)
+			if err := applyCRDsFromFile(ctx, crdClient, path); err != nil {
+				return fmt.Errorf("apply CRD %s: %w", path, err)
 			}
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("walk the path %s: %v", crdsDir, err)
+			return fmt.Errorf("walk the path %s: %w", crdsDir, err)
 		}
 	}
 	return nil
 }
 
 // applyCRDsFromFile reads a YAML file, splits it into documents, and applies each CRD to the cluster.
-func applyCRDsFromFile(ctx context.Context, client *clientset.Clientset, filePath string) error {
+func applyCRDsFromFile(ctx context.Context, crdClient v1.CustomResourceDefinitionInterface, filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("open file %q: %v", filePath, err)
+		return fmt.Errorf("open file %q: %w", filePath, err)
 	}
 	defer file.Close()
 
@@ -132,7 +133,7 @@ func applyCRDsFromFile(ctx context.Context, client *clientset.Clientset, filePat
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("decode YAML: %v", err)
+			return fmt.Errorf("decode YAML: %w", err)
 		}
 		if crd.GetObjectKind().GroupVersionKind().Kind != "CustomResourceDefinition" {
 			log.Printf("Skipping non-CRD object %s", crd.GetName())
@@ -144,30 +145,32 @@ func applyCRDsFromFile(ctx context.Context, client *clientset.Clientset, filePat
 	// Apply each CRD separately.
 	for _, crd := range crdsToApply {
 		err := wait.ExponentialBackoffWithContext(ctx, retry.DefaultBackoff, func(context.Context) (bool, error) {
-			if err := applyCRD(ctx, client, crd); err != nil {
-				//nolint:nilerr
+			if err := applyCRD(ctx, crdClient, crd); err != nil {
+				log.Printf("Failed to apply CRD %s: %v", crd.Name, err)
 				return false, nil
 			}
 			return true, nil
 		})
 		if err != nil {
-			return fmt.Errorf("apply CRD %s: %v", crd.Name, err)
+			return fmt.Errorf("apply CRD %s: %w", crd.Name, err)
 		}
 	}
 	return nil
 }
 
 // applyCRD creates or updates the CRD.
-func applyCRD(ctx context.Context, client *clientset.Clientset, crd *apiextensionsv1.CustomResourceDefinition) error {
-	crdClient := client.ApiextensionsV1().CustomResourceDefinitions()
-
+func applyCRD(
+	ctx context.Context,
+	crdClient v1.CustomResourceDefinitionInterface,
+	crd *apiextensionsv1.CustomResourceDefinition,
+) error {
 	// Check if CRD already exists in cluster and create if not found.
 	curCRD, err := crdClient.Get(ctx, crd.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		log.Printf("Create CRD %s", crd.Name)
 		_, err = crdClient.Create(ctx, crd, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("create CRD %s: %v", crd.Name, err)
+			return fmt.Errorf("create CRD %s: %w", crd.Name, err)
 		}
 	} else {
 		log.Printf("Update CRD %s", crd.Name)
@@ -175,7 +178,7 @@ func applyCRD(ctx context.Context, client *clientset.Clientset, crd *apiextensio
 		crd.SetResourceVersion(curCRD.GetResourceVersion())
 		_, err = crdClient.Update(ctx, crd, metav1.UpdateOptions{})
 		if err != nil {
-			return fmt.Errorf("update CRD %s: %v", crd.Name, err)
+			return fmt.Errorf("update CRD %s: %w", crd.Name, err)
 		}
 	}
 	return nil

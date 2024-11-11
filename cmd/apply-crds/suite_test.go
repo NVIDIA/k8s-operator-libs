@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	v1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -29,8 +30,8 @@ import (
 )
 
 var (
-	testClient *clientset.Clientset
-	testEnv    *envtest.Environment
+	testCRDClient v1.CustomResourceDefinitionInterface
+	testEnv       *envtest.Environment
 )
 
 func TestApplyCrds(t *testing.T) {
@@ -49,9 +50,10 @@ var _ = BeforeSuite(func() {
 	Expect(cfg).NotTo(BeNil())
 
 	// create clientset with scheme
-	testClient, err = clientset.NewForConfig(cfg)
+	client, err := clientset.NewForConfig(cfg)
 	Expect(err).NotTo(HaveOccurred())
-	Expect(testClient).NotTo(BeNil())
+	Expect(client).NotTo(BeNil())
+	testCRDClient = client.ApiextensionsV1().CustomResourceDefinitions()
 
 	go func() {
 		defer GinkgoRecover()

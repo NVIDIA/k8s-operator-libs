@@ -35,30 +35,30 @@ var _ = Describe("CRD Application", func() {
 	})
 
 	AfterEach(func() {
-		Expect(testClient.ApiextensionsV1().CustomResourceDefinitions().DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})).NotTo(HaveOccurred())
+		Expect(testCRDClient.DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})).NotTo(HaveOccurred())
 	})
 
 	Describe("applyCRDsFromFile", func() {
 		It("should apply CRDs multiple times from a valid YAML file", func() {
 			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs are applied")
-			crds, err := testClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
+			crds, err := testCRDClient.List(ctx, metav1.ListOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(crds.Items).To(HaveLen(2))
 		})
 
 		It("should update CRDs", func() {
 			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs do not have spec.foobar")
 			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
-				crd, err := testClient.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, crdName, metav1.GetOptions{})
+				crd, err := testCRDClient.Get(ctx, crdName, metav1.GetOptions{})
 				Expect(err).NotTo(HaveOccurred())
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				Expect(props).To(HaveKey("spec"))
@@ -66,11 +66,11 @@ var _ = Describe("CRD Application", func() {
 			}
 
 			By("updating CRDs")
-			Expect(applyCRDsFromFile(ctx, testClient, "test-files/updated-test-crds.yaml")).To(Succeed())
+			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/updated-test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs are updated")
 			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
-				crd, err := testClient.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, crdName, metav1.GetOptions{})
+				crd, err := testCRDClient.Get(ctx, crdName, metav1.GetOptions{})
 				Expect(err).NotTo(HaveOccurred())
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				Expect(props["spec"].Properties).To(HaveKey("foobar"))
