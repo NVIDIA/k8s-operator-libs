@@ -8,7 +8,7 @@ require (
 	github.com/onsi/gomega v1.34.2
 	github.com/stretchr/testify v1.9.0
 	k8s.io/api v0.31.2
-	k8s.io/apiextensions-apiserver v0.31.0
+	k8s.io/apiextensions-apiserver v0.31.2
 	k8s.io/apimachinery v0.31.2
 	k8s.io/client-go v0.31.2
 	k8s.io/kubectl v0.31.2
