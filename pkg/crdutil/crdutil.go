@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package applycrds
+package crdutil
 
 import (
 	"context"
@@ -67,9 +67,9 @@ func initFlags() {
 	}
 }
 
-// Run reads each YAML file in the directory, splits it into documents, and applies each CRD to the cluster.
+// EnsureCRDsCmd reads each YAML file in the directory, splits it into documents, and applies each CRD to the cluster.
 // The parameter --crds-dir is required and should point to the directory containing the CRD manifests.
-func Run() {
+func EnsureCRDsCmd() {
 	ctx := context.Background()
 
 	initFlags()

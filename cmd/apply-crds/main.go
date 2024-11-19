@@ -16,8 +16,8 @@ limitations under the License.
 
 package main
 
-import "github.com/NVIDIA/k8s-operator-libs/pkg/applycrds"
+import "github.com/NVIDIA/k8s-operator-libs/pkg/crdutil"
 
 func main() {
-	applycrds.Run()
+	crdutil.EnsureCRDsCmd()
 }
