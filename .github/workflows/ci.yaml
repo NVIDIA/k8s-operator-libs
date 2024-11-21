@@ -13,7 +13,11 @@
 # limitations under the License.
 
 name: "CI"
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - "pull-request/[0-9]+"
+      - main
 
 jobs:
   lint:
