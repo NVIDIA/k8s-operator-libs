@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/pflag"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	v1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
@@ -37,38 +38,31 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-type StringList []string
-
-func (s *StringList) String() string {
-	return strings.Join(*s, ", ")
-}
-
-func (s *StringList) Set(value string) error {
-	*s = append(*s, value)
-	return nil
-}
-
 var (
-	crdsDir StringList
+	filenames []string
+	recursive bool
 )
 
 func initFlags() {
-	flag.Var(&crdsDir, "crds-dir", "Path to the directory containing the CRD manifests")
-	flag.Parse()
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.StringSliceVarP(&filenames, "filename", "f", filenames, "The files that contain the configurations to apply.")
+	pflag.BoolVarP(&recursive, "recursive", "R", false, "Process the directory used in -f, --filename recursively.")
+	pflag.Parse()
 
-	if len(crdsDir) == 0 {
-		log.Fatalf("CRDs directory is required")
+	if len(filenames) == 0 {
+		log.Fatalf("CRDs directory or single CRDs are required")
 	}
 
-	for _, crdDir := range crdsDir {
+	for _, crdDir := range filenames {
 		if _, err := os.Stat(crdDir); os.IsNotExist(err) {
-			log.Fatalf("CRDs directory %s does not exist", crdsDir)
+			log.Fatalf("CRDs directory %s does not exist", filenames)
 		}
 	}
 }
 
 // EnsureCRDsCmd reads each YAML file in the directory, splits it into documents, and applies each CRD to the cluster.
 // The parameter --crds-dir is required and should point to the directory containing the CRD manifests.
+// TODO: add unit test for this command.
 func EnsureCRDsCmd() {
 	ctx := context.Background()
 
@@ -84,38 +78,59 @@ func EnsureCRDsCmd() {
 		log.Fatalf("Failed to create API extensions client: %v", err)
 	}
 
-	if err := walkCrdsDir(ctx, client.ApiextensionsV1().CustomResourceDefinitions()); err != nil {
-		log.Fatalf("Failed to apply CRDs: %v", err)
+	dirsToApply, err := walkCRDs(recursive, filenames)
+	if err != nil {
+		log.Fatalf("Failed to walk through CRDs: %v", err)
+	}
+
+	for _, dir := range dirsToApply {
+		log.Printf("Apply CRDs from file: %s", dir)
+		if err := applyCRDs(ctx, client.ApiextensionsV1().CustomResourceDefinitions(), dir); err != nil {
+			log.Fatalf("Failed to apply CRDs: %v", err)
+		}
 	}
 }
 
-// walkCrdsDir walks the CRDs directory and applies each YAML file.
-func walkCrdsDir(ctx context.Context, crdClient v1.CustomResourceDefinitionInterface) error {
-	for _, crdDir := range crdsDir {
+// walkCRDs walks the CRDs directory and applies each YAML file.
+// TODO: add unit test  for this function.
+func walkCRDs(recursive bool, crdDirs []string) ([]string, error) {
+	var dirs []string
+	for _, crdDir := range crdDirs {
+		// We need the parent directory to check if we are in the top-level directory.
+		// This is necessary for the recursive logic.
+		// We can skip the errors as it has been checked in initFlags.
+		parentDir, _ := os.Stat(crdDir)
 		// Walk the directory recursively and apply each YAML file.
 		err := filepath.Walk(crdDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() || filepath.Ext(path) != ".yaml" {
+			// If this is a directory, skip it.
+			// filepath.Walk() is also called for directories, but we only want to apply CRDs from files.
+			if info.IsDir() {
+				return nil
+			}
+			if filepath.Ext(path) != ".yaml" && filepath.Ext(path) != ".yml" {
+				return nil
+			}
+			// If not recursive we want to only apply the CRDs in the top-level directory.
+			// filepath.Dir() does not add a trailing slash, thus we need to trim it in the crdDir.
+			if !recursive && parentDir.IsDir() && filepath.Dir(path) != strings.TrimRight(crdDir, "/") {
 				return nil
 			}
 
-			log.Printf("Apply CRDs from file: %s", path)
-			if err := applyCRDsFromFile(ctx, crdClient, path); err != nil {
-				return fmt.Errorf("apply CRD %s: %w", path, err)
-			}
+			dirs = append(dirs, path)
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("walk the path %s: %w", crdsDir, err)
+			return []string{}, fmt.Errorf("walk the path %s: %w", crdDirs, err)
 		}
 	}
-	return nil
+	return dirs, nil
 }
 
-// applyCRDsFromFile reads a YAML file, splits it into documents, and applies each CRD to the cluster.
-func applyCRDsFromFile(ctx context.Context, crdClient v1.CustomResourceDefinitionInterface, filePath string) error {
+// applyCRDs reads a YAML file, splits it into documents, and applies each CRD to the cluster.
+func applyCRDs(ctx context.Context, crdClient v1.CustomResourceDefinitionInterface, filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("open file %q: %w", filePath, err)
@@ -170,14 +185,19 @@ func applyCRD(
 		if err != nil {
 			return fmt.Errorf("create CRD %s: %w", crd.Name, err)
 		}
-	} else {
-		log.Printf("Update CRD %s", crd.Name)
-		// Set resource version to update an existing CRD.
-		crd.SetResourceVersion(curCRD.GetResourceVersion())
-		_, err = crdClient.Update(ctx, crd, metav1.UpdateOptions{})
-		if err != nil {
-			return fmt.Errorf("update CRD %s: %w", crd.Name, err)
-		}
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("get CRD %s: %w", crd.Name, err)
+	}
+
+	log.Printf("Update CRD %s", crd.Name)
+	// Set resource version to update an existing CRD.
+	crd.SetResourceVersion(curCRD.GetResourceVersion())
+	_, err = crdClient.Update(ctx, crd, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("update CRD %s: %w", crd.Name, err)
+	}
+
 	return nil
 }

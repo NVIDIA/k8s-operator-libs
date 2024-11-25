@@ -38,13 +38,13 @@ var _ = Describe("CRD Application", func() {
 		Expect(testCRDClient.DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})).NotTo(HaveOccurred())
 	})
 
-	Describe("applyCRDsFromFile", func() {
+	Describe("applyCRDs", func() {
 		It("should apply CRDs multiple times from a valid YAML file", func() {
 			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs are applied")
 			crds, err := testCRDClient.List(ctx, metav1.ListOptions{})
@@ -54,7 +54,7 @@ var _ = Describe("CRD Application", func() {
 
 		It("should update CRDs", func() {
 			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs do not have spec.foobar")
 			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
@@ -66,7 +66,7 @@ var _ = Describe("CRD Application", func() {
 			}
 
 			By("updating CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/updated-test-crds.yaml")).To(Succeed())
+			Expect(applyCRDs(ctx, testCRDClient, "test-files/updated-test-crds.yaml")).To(Succeed())
 
 			By("verifying CRDs are updated")
 			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
