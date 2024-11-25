@@ -83,12 +83,25 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 		GracePeriodSeconds:  -1,
 		Timeout:             time.Duration(drainSpec.TimeoutSecond) * time.Second,
 		PodSelector:         drainSpec.PodSelector,
-		OnPodDeletedOrEvicted: func(pod *corev1.Pod, usingEviction bool) {
-			verbStr := "Deleted"
+		OnPodDeletionOrEvictionFinished: func(pod *corev1.Pod, usingEviction bool, err error) {
+			var verbStr string
 			if usingEviction {
-				verbStr = "Evicted"
+				if err != nil {
+					verbStr = "eviction failed"
+				} else {
+					verbStr = "evicted"
+				}
+			} else {
+				if err != nil {
+					verbStr = "deletion failed"
+				} else {
+					verbStr = "deleted"
+				}
 			}
-			m.log.V(consts.LogLevelInfo).Info(fmt.Sprintf("%s pod from Node %s/%s", verbStr, pod.Namespace, pod.Name))
+			if err != nil {
+				m.log.V(consts.LogLevelWarning).Info("pod deletion/eviction failed", "error", err)
+			}
+			m.log.V(consts.LogLevelInfo).Info(fmt.Sprintf("pod %s/%s %s\n", pod.Namespace, pod.Name, verbStr))
 		},
 		Out:    os.Stdout,
 		ErrOut: os.Stdout,
