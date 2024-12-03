@@ -17,7 +17,7 @@ package mocks
 import (
 	context "context"
 
-	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	common "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -27,11 +27,11 @@ type DrainManager struct {
 }
 
 // ScheduleNodesDrain provides a mock function with given fields: ctx, drainConfig
-func (_m *DrainManager) ScheduleNodesDrain(ctx context.Context, drainConfig *upgrade.DrainConfiguration) error {
+func (_m *DrainManager) ScheduleNodesDrain(ctx context.Context, drainConfig *common.DrainConfiguration) error {
 	ret := _m.Called(ctx, drainConfig)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *upgrade.DrainConfiguration) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *common.DrainConfiguration) error); ok {
 		r0 = rf(ctx, drainConfig)
 	} else {
 		r0 = ret.Error(0)

@@ -14,20 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package common_test
 
 import (
 	"context"
 	"fmt"
 
+	common "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1 "k8s.io/api/core/v1"
-
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("SafeDriverLoadManager", func() {
@@ -35,7 +34,7 @@ var _ = Describe("SafeDriverLoadManager", func() {
 		node *corev1.Node
 		ctx  context.Context
 		id   string
-		mgr  upgrade.SafeDriverLoadManager
+		mgr  common.SafeDriverLoadManager
 	)
 	BeforeEach(func() {
 		ctx = context.Background()
@@ -43,10 +42,10 @@ var _ = Describe("SafeDriverLoadManager", func() {
 		id = randSeq(5)
 		// create k8s objects
 		node = createNode(fmt.Sprintf("node-%s", id))
-		mgr = upgrade.NewSafeDriverLoadManager(upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log)
+		mgr = common.NewSafeDriverLoadManager(common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log)
 	})
 	It("IsWaitingForSafeDriverLoad", func() {
-		annotationKey := upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
+		annotationKey := common.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
 		Expect(k8sClient.Patch(
 			ctx, node, client.RawPatch(types.StrategicMergePatchType,
 				[]byte(fmt.Sprintf(`{"metadata":{"annotations":{%q: "true"}}}`,
@@ -61,7 +60,7 @@ var _ = Describe("SafeDriverLoadManager", func() {
 		Expect(mgr.IsWaitingForSafeDriverLoad(ctx, node)).To(BeFalse())
 	})
 	It("UnblockLoading", func() {
-		annotationKey := upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
+		annotationKey := common.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
 		Expect(k8sClient.Patch(
 			ctx, node, client.RawPatch(types.StrategicMergePatchType,
 				[]byte(fmt.Sprintf(`{"metadata":{"annotations":{%q: "true"}}}`,
