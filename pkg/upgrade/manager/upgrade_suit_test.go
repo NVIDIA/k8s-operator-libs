@@ -26,9 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,8 +40,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/manager/mocks"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -94,13 +92,13 @@ var _ = BeforeSuite(func() {
 	log = ctrl.Log.WithName("upgradeSuitTest")
 
 	// set driver name to be managed by the upgrade-manager
-	upgrade.SetDriverName("gpu")
+	base.SetDriverName("gpu")
 
 	nodeUpgradeStateProvider = mocks.NodeUpgradeStateProvider{}
 	nodeUpgradeStateProvider.
 		On("ChangeNodeUpgradeState", mock.Anything, mock.Anything, mock.Anything).
 		Return(func(ctx context.Context, node *corev1.Node, newNodeState string) error {
-			node.Labels[upgrade.GetUpgradeStateLabelKey()] = newNodeState
+			node.Labels[base.GetUpgradeStateLabelKey()] = newNodeState
 			return nil
 		})
 	nodeUpgradeStateProvider.
@@ -145,7 +143,7 @@ var _ = BeforeSuite(func() {
 		On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
 		Return(
 			func(ctx context.Context, pod *corev1.Pod) string {
-				return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
+				return pod.Labels[base.PodControllerRevisionHashLabelKey]
 			},
 			func(ctx context.Context, pod *corev1.Pod) error {
 				return nil
@@ -218,7 +216,7 @@ func (n Node) WithUpgradeState(state string) Node {
 	if n.Labels == nil {
 		n.Labels = make(map[string]string)
 	}
-	n.Labels[upgrade.GetUpgradeStateLabelKey()] = state
+	n.Labels[base.GetUpgradeStateLabelKey()] = state
 	return n
 }
 
@@ -379,77 +377,10 @@ func createNamespace(name string) *corev1.Namespace {
 	return namespace
 }
 
-func createPod(name, namespace string, labels map[string]string, nodeName string) *corev1.Pod {
-	gracePeriodSeconds := int64(0)
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels:    labels,
-		},
-		Spec: corev1.PodSpec{
-			TerminationGracePeriodSeconds: &gracePeriodSeconds,
-			NodeName:                      nodeName,
-			Containers: []corev1.Container{
-				{
-					Name:  "test-container",
-					Image: "test-image",
-				},
-			},
-		},
-	}
-	err := k8sClient.Create(context.TODO(), pod)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, pod)
-	return pod
-}
-
 func updatePodStatus(pod *corev1.Pod) error {
 	err := k8sClient.Status().Update(context.TODO(), pod)
 	Expect(err).NotTo(HaveOccurred())
 	return err
-}
-
-func updatePod(pod *corev1.Pod) error {
-	err := k8sClient.Update(context.TODO(), pod)
-	Expect(err).NotTo(HaveOccurred())
-	return err
-}
-
-func createJob(name string, namespace string, labels map[string]string) *batchv1.Job {
-	var backOffLimit int32 = 0
-	manualSelector := true
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels:    labels,
-		},
-		Spec: batchv1.JobSpec{
-			ManualSelector: &manualSelector,
-			Selector:       &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []v1.Container{
-						{
-							Name:    name,
-							Image:   "test-image",
-							Command: []string{"test-command"},
-						},
-					},
-					RestartPolicy: corev1.RestartPolicyNever,
-				},
-			},
-			BackoffLimit: &backOffLimit,
-		},
-	}
-	err := k8sClient.Create(context.TODO(), job)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, job)
-	return job
 }
 
 func createNode(name string) *corev1.Node {
@@ -469,32 +400,12 @@ func getNode(name string) *corev1.Node {
 	return node
 }
 
-func updateNode(node *corev1.Node) error {
-	err := k8sClient.Update(context.TODO(), node)
-	Expect(err).NotTo(HaveOccurred())
-	return err
-}
-
-func deleteObj(obj client.Object) {
-	Expect(k8sClient.Delete(context.TODO(), obj)).To(BeNil())
-}
-
 func getNodeUpgradeState(node *corev1.Node) string {
-	return node.Labels[upgrade.GetUpgradeStateLabelKey()]
+	return node.Labels[base.GetUpgradeStateLabelKey()]
 }
 
 func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[upgrade.GetUpgradeInitialStateAnnotationKey()]
-	return ok
-}
-
-func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[upgrade.GetWaitForPodCompletionStartTimeAnnotationKey()]
-	return ok
-}
-
-func isValidationAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[upgrade.GetValidationStartTimeAnnotationKey()]
+	_, ok := node.Annotations[base.GetUpgradeInitialStateAnnotationKey()]
 	return ok
 }
 
