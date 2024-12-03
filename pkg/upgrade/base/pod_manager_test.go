@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package base_test
 
 import (
 	"context"
@@ -31,13 +31,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
 var _ = Describe("PodManager", func() {
 	var node *corev1.Node
 	var namespace *corev1.Namespace
-	var podManagerConfig upgrade.PodManagerConfig
+	var podManagerConfig base.PodManagerConfig
 
 	var ctx context.Context
 	var id string
@@ -51,7 +51,7 @@ var _ = Describe("PodManager", func() {
 		node = createNode(fmt.Sprintf("node-%s", id))
 		namespace = createNamespace(fmt.Sprintf("namespace-%s", id))
 		// default PodManagerConfig
-		podManagerConfig = upgrade.PodManagerConfig{
+		podManagerConfig = base.PodManagerConfig{
 			WaitForCompletionSpec: &v1alpha1.WaitForCompletionSpec{
 				PodSelector:   "",
 				TimeoutSecond: 0,
@@ -80,7 +80,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(podList.Items).To(HaveLen(4))
 
-			manager := upgrade.NewPodManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
 			err = manager.SchedulePodsRestart(ctx, restartPods)
 			Expect(err).To(Succeed())
 
@@ -102,7 +102,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(podList.Items).To(HaveLen(0))
 
-			manager := upgrade.NewPodManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
 			err = manager.SchedulePodsRestart(ctx, []*corev1.Pod{deletedPod})
 			Expect(err).To(HaveOccurred())
 		})
@@ -112,7 +112,7 @@ var _ = Describe("PodManager", func() {
 			Expect(err).To(Succeed())
 			Expect(podList.Items).To(HaveLen(0))
 
-			manager := upgrade.NewPodManager(k8sInterface, upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder), log, nil, eventRecorder)
 			err = manager.SchedulePodsRestart(ctx, []*corev1.Pod{})
 			Expect(err).To(Succeed())
 		})
@@ -121,8 +121,8 @@ var _ = Describe("PodManager", func() {
 	Describe("ScheduleCheckOnPodCompletion", func() {
 		It("should change the state of the node only after job completion", func() {
 			// initialize upgrade state of the node
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateWaitForJobsRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateWaitForJobsRequired)
 			Expect(err).To(Succeed())
 
 			// create pod to be running on testnode
@@ -141,21 +141,21 @@ var _ = Describe("PodManager", func() {
 			Expect(podList.Items).NotTo(BeEmpty())
 
 			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
 			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
 			// verify upgrade state is changed to new state on workload pod completion
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStatePodDeletionRequired))
 			// verify annotation which tracks start time is not added.
 			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
 		It("should not change the state of the node if workload pod is running", func() {
 			// initialize upgrade state of the node
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateWaitForJobsRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateWaitForJobsRequired)
 			Expect(err).To(Succeed())
 
 			// create pod to be running on testnode
@@ -169,21 +169,21 @@ var _ = Describe("PodManager", func() {
 			Expect(podList.Items).NotTo(BeEmpty())
 
 			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
 			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
 			// verify upgrade state is unchanged with workload pod running
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateWaitForJobsRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateWaitForJobsRequired))
 			// verify annotation is added to track the start time.
 			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
 		It("should change the state of the node if workload pod is running and timeout is reached", func() {
 			// initialize upgrade state of the node
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateWaitForJobsRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateWaitForJobsRequired)
 			Expect(err).To(Succeed())
 
 			// create pod to be running on testnode
@@ -198,20 +198,20 @@ var _ = Describe("PodManager", func() {
 
 			podManagerConfig.WaitForCompletionSpec.PodSelector = "app=my-app"
 			podManagerConfig.WaitForCompletionSpec.TimeoutSecond = 30
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, nil, eventRecorder)
 			err = manager.ScheduleCheckOnPodCompletion(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
 			// verify upgrade state is unchanged with workload pod running
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateWaitForJobsRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateWaitForJobsRequired))
 
 			// verify annotation is added track the start time.
 			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(true))
 
 			startTime := strconv.FormatInt(time.Now().Unix()-35, 10)
-			provider.ChangeNodeUpgradeAnnotation(ctx, node, upgrade.GetWaitForPodCompletionStartTimeAnnotationKey(), startTime)
+			provider.ChangeNodeUpgradeAnnotation(ctx, node, base.GetWaitForPodCompletionStartTimeAnnotationKey(), startTime)
 
 			podManagerConfig.Nodes = []*corev1.Node{node}
 
@@ -221,7 +221,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state is unchanged with workload pod running
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodDeletionRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStatePodDeletionRequired))
 			// verify annotation is removed to track the start time.
 			Expect(isWaitForCompletionAnnotationPresent(node)).To(Equal(false))
 		})
@@ -245,12 +245,12 @@ var _ = Describe("PodManager", func() {
 			}
 
 			// initialize upgrade state of the node
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
 			podManagerConfig.DeletionSpec.Force = true
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
@@ -265,7 +265,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStatePodRestartRequired))
 		})
 
 		It("should fail to delete all standalone gpu pods without force,"+
@@ -275,11 +275,11 @@ var _ = Describe("PodManager", func() {
 				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
 			}
 
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			podManagerConfig.DrainEnabled = false
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
@@ -298,7 +298,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state is set to UpgradeStateFailed
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateFailed))
 		})
 
 		It("should fail to delete all standalone gpu pods without force,"+
@@ -308,11 +308,11 @@ var _ = Describe("PodManager", func() {
 				NewPod(fmt.Sprintf("gpu-pod2-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/mig-1g.5gb", "1").Create(),
 			}
 
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			podManagerConfig.DrainEnabled = true
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
@@ -330,7 +330,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state is set to UpgradeStateDrainRequired
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateDrainRequired))
 		})
 
 		It("should delete all standalone gpu pods using emptyDir when force=true and deleteEmptyDir=true"+
@@ -343,13 +343,13 @@ var _ = Describe("PodManager", func() {
 			gpuPods = append(gpuPods, NewPod("test-gpu-pod", namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").WithEmptyDir().Create())
 
 			// initialize upgrade state of the node
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
 			podManagerConfig.DeletionSpec.Force = true
 			podManagerConfig.DeletionSpec.DeleteEmptyDir = true
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			Expect(err).To(Succeed())
 
@@ -364,7 +364,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStatePodRestartRequired))
 		})
 
 		It("should fail to delete all standalone gpu pods with emptyDir when force=true and deleteEmptyDir=false,"+
@@ -373,13 +373,13 @@ var _ = Describe("PodManager", func() {
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").WithEmptyDir().Create(),
 			}
 
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
 			podManagerConfig.DeletionSpec.Force = true
 			podManagerConfig.DrainEnabled = false
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
 			// when deleting pods on a node. The node will be transitioned to the UpgradeFailed
@@ -397,7 +397,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state is set to UpgradeStateFailed
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateFailed))
 		})
 
 		It("should fail to delete all standalone gpu pods with emptyDir when force=true and deleteEmptyDir=false,"+
@@ -406,13 +406,13 @@ var _ = Describe("PodManager", func() {
 				NewPod(fmt.Sprintf("gpu-pod1-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").WithEmptyDir().Create(),
 			}
 
-			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-			err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStatePodDeletionRequired)
+			provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodDeletionRequired)
 			Expect(err).To(Succeed())
 
 			podManagerConfig.DeletionSpec.Force = true
 			podManagerConfig.DrainEnabled = true
-			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			manager := base.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
 			err = manager.SchedulePodEviction(ctx, &podManagerConfig)
 			// Note: SchedulePodEviction() will not return an error if issues were encountered
 			// when deleting pods on a node.
@@ -429,7 +429,7 @@ var _ = Describe("PodManager", func() {
 			// verify upgrade state is set to UpgradeStateDrainRequired
 			node, err = provider.GetNode(ctx, node.Name)
 			Expect(err).To(Succeed())
-			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateDrainRequired))
+			Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateDrainRequired))
 		})
 	})
 })

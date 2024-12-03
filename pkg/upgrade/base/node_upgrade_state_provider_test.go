@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package base_test
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
 var _ = Describe("NodeUpgradeStateProvider tests", func() {
@@ -38,19 +38,19 @@ var _ = Describe("NodeUpgradeStateProvider tests", func() {
 		node = createNode(fmt.Sprintf("node-%s", id))
 	})
 	It("NodeUpgradeStateProvider should change node upgrade state and retrieve the latest node object", func() {
-		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 
-		err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateUpgradeRequired)
+		err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateUpgradeRequired)
 		Expect(err).To(Succeed())
 
 		node, err = provider.GetNode(ctx, node.Name)
 		Expect(err).To(Succeed())
-		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+		Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateUpgradeRequired))
 	})
 	It("NodeUpgradeStateProvider should change node upgrade annotation and retrieve the latest node object", func() {
-		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 
-		key := upgrade.GetUpgradeInitialStateAnnotationKey()
+		key := base.GetUpgradeInitialStateAnnotationKey()
 		err := provider.ChangeNodeUpgradeAnnotation(ctx, node, key, "true")
 		Expect(err).To(Succeed())
 
@@ -59,9 +59,9 @@ var _ = Describe("NodeUpgradeStateProvider tests", func() {
 		Expect(node.Annotations[key]).To(Equal("true"))
 	})
 	It("NodeUpgradeStateProvider should delete node upgrade annotation and retrieve the latest node object", func() {
-		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 
-		key := upgrade.GetUpgradeInitialStateAnnotationKey()
+		key := base.GetUpgradeInitialStateAnnotationKey()
 		err := provider.ChangeNodeUpgradeAnnotation(ctx, node, key, "null")
 		Expect(err).To(Succeed())
 
