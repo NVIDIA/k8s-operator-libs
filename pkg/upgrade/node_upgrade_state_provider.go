@@ -85,7 +85,7 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeState(
 			"node", node,
 			"state", newNodeState)
 		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-			"Failed to update node state label to %s, %s", newNodeState, err.Error())
+			fmt.Sprintf("Failed to update node state label to %s, %s", newNodeState, err.Error()))
 		return err
 	}
 
@@ -121,13 +121,13 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeState(
 			"node", node,
 			"state", newNodeState)
 		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-			"Failed to update node state label to %s, %s", newNodeState, err.Error())
+			fmt.Sprintf("Failed to update node state label to %s, %s", newNodeState, err.Error()))
 	} else {
 		p.Log.V(consts.LogLevelInfo).Info("Successfully changed node upgrade state label",
 			"node", node.Name,
 			"new state", newNodeState)
 		logEventf(p.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(),
-			"Successfully updated node state label to %s", newNodeState)
+			fmt.Sprintf("Successfully updated node state label to %s", newNodeState))
 	}
 
 	return err
@@ -156,7 +156,7 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 			"annotationKey", key,
 			"annotationValue", value)
 		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-			"Failed to update node annotation %s=%s: %s", key, value, err.Error())
+			fmt.Sprintf("Failed to update node annotation %s=%s: %s", key, value, err.Error()))
 		return err
 	}
 
@@ -202,14 +202,14 @@ func (p *NodeUpgradeStateProviderImpl) ChangeNodeUpgradeAnnotation(
 			"annotationKey", key,
 			"annotationValue", value)
 		logEventf(p.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-			"Failed to update node annotation to %s=%s: %s", key, value, err.Error())
+			fmt.Sprintf("Failed to update node annotation to %s=%s: %s", key, value, err.Error()))
 	} else {
 		p.Log.V(consts.LogLevelInfo).Info("Successfully changed node upgrade state annotation",
 			"node", node.Name,
 			"annotationKey", key,
 			"annotationValue", value)
 		logEventf(p.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(),
-			"Successfully updated node annotation to %s=%s", key, value)
+			fmt.Sprintf("Successfully updated node annotation to %s=%s", key, value))
 	}
 
 	return err

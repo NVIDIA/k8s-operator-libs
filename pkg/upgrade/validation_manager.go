@@ -97,7 +97,7 @@ func (m *ValidationManagerImpl) Validate(ctx context.Context, node *corev1.Node)
 			err = m.handleTimeout(ctx, node, int64(validationTimeoutSeconds))
 			if err != nil {
 				logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-					"Failed to handle timeout for validation state", err.Error())
+					fmt.Sprintf("Failed to handle timeout for validation state: %s", err.Error()))
 				return false, fmt.Errorf("unable to handle timeout for validation state: %v", err)
 			}
 			done = false
