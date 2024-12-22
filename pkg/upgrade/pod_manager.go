@@ -214,7 +214,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to delete pods on the node", "node", node.Name)
 					logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
-						"Failed to delete workload pods on the node for the driver upgrade, %s", err.Error())
+						fmt.Sprintf("Failed to delete workload pods on the node for the driver upgrade, %s", err.Error()))
 					m.updateNodeToDrainOrFailed(ctx, node, config.DrainEnabled)
 					return
 				}
@@ -246,7 +246,7 @@ func (m *PodManagerImpl) SchedulePodsRestart(ctx context.Context, pods []*corev1
 		if err != nil {
 			m.log.V(consts.LogLevelInfo).Error(err, "Failed to delete pod", "pod", pod.Name)
 			logEventf(m.eventRecorder, pod, corev1.EventTypeWarning, GetEventReason(),
-				"Failed to restart driver pod %s", err.Error())
+				fmt.Sprintf("Failed to restart driver pod %s", err.Error()))
 			return err
 		}
 	}
@@ -294,7 +294,7 @@ func (m *PodManagerImpl) ScheduleCheckOnPodCompletion(ctx context.Context, confi
 					err = m.HandleTimeoutOnPodCompletions(ctx, &node, int64(config.WaitForCompletionSpec.TimeoutSecond))
 					if err != nil {
 						logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
-							"Failed to handle timeout for job completions, %s", err.Error())
+							fmt.Sprintf("Failed to handle timeout for job completions, %s", err.Error()))
 						return
 					}
 				}
@@ -305,7 +305,7 @@ func (m *PodManagerImpl) ScheduleCheckOnPodCompletion(ctx context.Context, confi
 			err = m.nodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, &node, annotationKey, "null")
 			if err != nil {
 				logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
-					"Failed to remove annotation used to track job completions: %s", err.Error())
+					fmt.Sprintf("Failed to remove annotation used to track job completions: %s", err.Error()))
 				return
 			}
 			// update node state
