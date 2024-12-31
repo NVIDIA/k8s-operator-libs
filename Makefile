@@ -41,9 +41,9 @@ TOOLSDIR=$(CURDIR)/bin
 GOLANGCILINT ?= $(TOOLSDIR)/golangci-lint
 CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
 GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
-GOLANGCILINT_VERSION ?= v1.60.3
-CONTROLLER_GEN_VERSION ?= v0.16.1
-GCOV2LCOV_VERSION ?= v1.0.6
+GOLANGCILINT_VERSION ?= v1.62.2
+CONTROLLER_GEN_VERSION ?= v0.16.5
+GCOV2LCOV_VERSION ?= v1.1.1
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
