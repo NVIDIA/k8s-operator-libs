@@ -1,6 +1,7 @@
 module github.com/NVIDIA/k8s-operator-libs
 
-go 1.22.0
+go 1.23.0
+
 toolchain go1.23.4
 
 require (
