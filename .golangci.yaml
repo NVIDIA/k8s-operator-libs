@@ -36,8 +36,6 @@ linters:
     - errchkjson
     - errname
     #- errorlint
-    - execinquery
-    - exportloopref
     - forbidigo
     - forcetypeassert
     - funlen
@@ -60,7 +58,7 @@ linters:
     - ineffassign
     - interfacebloat
     - lll
-    - logrlint
+    - loggercheck
     - maintidx
     - makezero
     - misspell
