@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package common_test
+package base_test
 
 import (
 	"context"
@@ -22,10 +22,11 @@ import (
 	"strconv"
 	"time"
 
-	common "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
 var _ = Describe("ValidationManager", func() {
@@ -42,16 +43,16 @@ var _ = Describe("ValidationManager", func() {
 	})
 
 	It("should return no error if podSelector is empty", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "")
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(true))
 	})
 
 	It("Validate() should return false when no validation pods are running", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validation")
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validation")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
@@ -59,11 +60,11 @@ var _ = Describe("ValidationManager", func() {
 	})
 
 	It("Validate() should return true if validation pod is Running and Ready", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 		_ = NewPod("pod", namespace.Name, node.Name).
 			WithLabels(map[string]string{"app": "validator"}).
 			Create()
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(true))
@@ -71,14 +72,14 @@ var _ = Describe("ValidationManager", func() {
 	})
 
 	It("Validate() should return false if validation pod is Running but not Ready", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 		pod := NewPod("pod", namespace.Name, node.Name).
 			WithLabels(map[string]string{"app": "validator"}).
 			Create()
 		pod.Status.ContainerStatuses[0].Ready = false
 		_ = updatePodStatus(pod)
 
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
@@ -86,14 +87,14 @@ var _ = Describe("ValidationManager", func() {
 	})
 
 	It("Validate() should return false if validation pod is not Running", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 		pod := NewPod("pod", namespace.Name, node.Name).
 			WithLabels(map[string]string{"app": "validator"}).
 			Create()
 		pod.Status.Phase = "Terminating"
 		_ = updatePodStatus(pod)
 
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
@@ -101,8 +102,8 @@ var _ = Describe("ValidationManager", func() {
 	})
 
 	It("Validate() should mark node as UpgradeFailed when validation does not complete before timeout", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-		err := provider.ChangeNodeUpgradeState(ctx, node, common.UpgradeStateValidationRequired)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateValidationRequired)
 		Expect(err).To(Succeed())
 
 		pod := NewPod("pod", namespace.Name, node.Name).
@@ -111,19 +112,19 @@ var _ = Describe("ValidationManager", func() {
 		pod.Status.ContainerStatuses[0].Ready = false
 		_ = updatePodStatus(pod)
 
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
 
 		node, err = provider.GetNode(ctx, node.Name)
 		Expect(err).To(Succeed())
-		Expect(node.Labels[common.GetUpgradeStateLabelKey()]).To(Equal(common.UpgradeStateValidationRequired))
+		Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateValidationRequired))
 
 		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
 
 		startTime := strconv.FormatInt(time.Now().Unix()-605, 10)
-		provider.ChangeNodeUpgradeAnnotation(ctx, node, common.GetValidationStartTimeAnnotationKey(), startTime)
+		provider.ChangeNodeUpgradeAnnotation(ctx, node, base.GetValidationStartTimeAnnotationKey(), startTime)
 
 		validationDone, err = validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
@@ -131,13 +132,13 @@ var _ = Describe("ValidationManager", func() {
 
 		node, err = provider.GetNode(ctx, node.Name)
 		Expect(err).To(Succeed())
-		Expect(node.Labels[common.GetUpgradeStateLabelKey()]).To(Equal(common.UpgradeStateFailed))
+		Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateFailed))
 		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
 	})
 
 	It("Validate() should remove annotation when validation completes before timeout", func() {
-		provider := common.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
-		err := provider.ChangeNodeUpgradeState(ctx, node, common.UpgradeStateValidationRequired)
+		provider := base.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		err := provider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateValidationRequired)
 		Expect(err).To(Succeed())
 
 		pod := NewPod("pod", namespace.Name, node.Name).
@@ -146,14 +147,14 @@ var _ = Describe("ValidationManager", func() {
 		pod.Status.ContainerStatuses[0].Ready = false
 		_ = updatePodStatus(pod)
 
-		validationManager := common.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationManager := base.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
 		validationDone, err := validationManager.Validate(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(validationDone).To(Equal(false))
 
 		node, err = provider.GetNode(ctx, node.Name)
 		Expect(err).To(Succeed())
-		Expect(node.Labels[common.GetUpgradeStateLabelKey()]).To(Equal(common.UpgradeStateValidationRequired))
+		Expect(node.Labels[base.GetUpgradeStateLabelKey()]).To(Equal(base.UpgradeStateValidationRequired))
 
 		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
 

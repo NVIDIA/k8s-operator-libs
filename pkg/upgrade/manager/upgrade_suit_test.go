@@ -40,7 +40,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/manager/mocks"
 	// +kubebuilder:scaffold:imports
 )
@@ -92,13 +92,13 @@ var _ = BeforeSuite(func() {
 	log = ctrl.Log.WithName("upgradeSuitTest")
 
 	// set driver name to be managed by the upgrade-manager
-	common.SetDriverName("gpu")
+	base.SetDriverName("gpu")
 
 	nodeUpgradeStateProvider = mocks.NodeUpgradeStateProvider{}
 	nodeUpgradeStateProvider.
 		On("ChangeNodeUpgradeState", mock.Anything, mock.Anything, mock.Anything).
 		Return(func(ctx context.Context, node *corev1.Node, newNodeState string) error {
-			node.Labels[common.GetUpgradeStateLabelKey()] = newNodeState
+			node.Labels[base.GetUpgradeStateLabelKey()] = newNodeState
 			return nil
 		})
 	nodeUpgradeStateProvider.
@@ -143,7 +143,7 @@ var _ = BeforeSuite(func() {
 		On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
 		Return(
 			func(ctx context.Context, pod *corev1.Pod) string {
-				return pod.Labels[common.PodControllerRevisionHashLabelKey]
+				return pod.Labels[base.PodControllerRevisionHashLabelKey]
 			},
 			func(ctx context.Context, pod *corev1.Pod) error {
 				return nil
@@ -216,7 +216,7 @@ func (n Node) WithUpgradeState(state string) Node {
 	if n.Labels == nil {
 		n.Labels = make(map[string]string)
 	}
-	n.Labels[common.GetUpgradeStateLabelKey()] = state
+	n.Labels[base.GetUpgradeStateLabelKey()] = state
 	return n
 }
 
@@ -401,11 +401,11 @@ func getNode(name string) *corev1.Node {
 }
 
 func getNodeUpgradeState(node *corev1.Node) string {
-	return node.Labels[common.GetUpgradeStateLabelKey()]
+	return node.Labels[base.GetUpgradeStateLabelKey()]
 }
 
 func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[common.GetUpgradeInitialStateAnnotationKey()]
+	_, ok := node.Annotations[base.GetUpgradeInitialStateAnnotationKey()]
 	return ok
 }
 

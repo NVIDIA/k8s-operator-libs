@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package common
+package base
 
 import (
 	"context"
@@ -60,6 +60,9 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 	return ClusterUpgradeState{NodeStates: make(map[string][]*NodeUpgradeState)}
 }
 
+// CommonUpgradeStateManager interface is a unified cluster upgrade abstraction for both upgrade modes
+//
+//nolint:interfacebloat
 type CommonUpgradeStateManager interface {
 	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 	BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error)

@@ -14,14 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package common_test
+package base_test
 
 import (
 	"context"
 
-	common "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
 var _ = Describe("CordonManager tests", func() {
@@ -29,7 +30,7 @@ var _ = Describe("CordonManager tests", func() {
 		ctx := context.TODO()
 		node := createNode("test-node")
 
-		cordonManager := common.NewCordonManager(k8sInterface, log)
+		cordonManager := base.NewCordonManager(k8sInterface, log)
 		err := cordonManager.Cordon(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())

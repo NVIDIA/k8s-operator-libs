@@ -20,24 +20,24 @@ import (
 	"context"
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/common"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
-// InboxUpgradeManagerImpl contains concrete implementations for distinct inbox upgrade mode
-type InboxUpgradeManagerImpl struct {
-	*common.CommonUpgradeManagerImpl
+// UpgradeManagerImpl contains concrete implementations for distinct inbox upgrade mode
+type UpgradeManagerImpl struct {
+	*base.CommonUpgradeManagerImpl
 }
 
 // ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
 // until the limit on max parallel upgrades is reached.
-func (m *InboxUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
-	ctx context.Context, currentClusterState *common.ClusterUpgradeState, upgradesAvailable int) error {
+func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
+	ctx context.Context, currentClusterState *base.ClusterUpgradeState, upgradesAvailable int) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeRequiredNodes")
-	for _, nodeState := range currentClusterState.NodeStates[common.UpgradeStateUpgradeRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
 		if m.IsUpgradeRequested(nodeState.Node) {
 			// Make sure to remove the upgrade-requested annotation
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
-				common.GetUpgradeRequestedAnnotationKey(), "null")
+				base.GetUpgradeRequestedAnnotationKey(), "null")
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to delete node upgrade-requested annotation")
@@ -61,14 +61,14 @@ func (m *InboxUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 			}
 		}
 
-		err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, common.UpgradeStateCordonRequired)
+		err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateCordonRequired)
 		if err == nil {
 			upgradesAvailable--
 			m.Log.V(consts.LogLevelInfo).Info("Node waiting for cordon",
 				"node", nodeState.Node.Name)
 		} else {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", common.UpgradeStateCordonRequired)
+				err, "Failed to change node upgrade state", "state", base.UpgradeStateCordonRequired)
 			return err
 		}
 	}
