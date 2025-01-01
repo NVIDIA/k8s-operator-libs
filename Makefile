@@ -26,8 +26,7 @@ IMAGE_TAG ?= $(GOLANG_VERSION)
 BUILDIMAGE ?= $(IMAGE):$(IMAGE_TAG)-devel
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.24.2
-ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
+ENVTEST_K8S_VERSION = 1.32.x
 
 TARGETS := all check lint go-check generate test cov-report controller-gen golangci-lint gcov2lcov
 DOCKER_TARGETS := $(patsubst %, docker-%, $(TARGETS))
@@ -41,9 +40,11 @@ TOOLSDIR=$(CURDIR)/bin
 GOLANGCILINT ?= $(TOOLSDIR)/golangci-lint
 CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
 GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
+SETUP_ENVTEST ?= $(TOOLSDIR)/setup-envtest
 GOLANGCILINT_VERSION ?= v1.62.2
 CONTROLLER_GEN_VERSION ?= v0.16.5
 GCOV2LCOV_VERSION ?= v1.1.1
+SETUP_ENVTEST_RELEASE ?= release-0.19
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -72,11 +73,9 @@ generate: controller-gen ## Generate code
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	go generate $(MODULE)/...
 
-test: generate; $(info  running $(NAME:%=% )tests...) @ ## Run tests
-	mkdir -p ${ENVTEST_ASSETS_DIR}
-	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.0/hack/setup-envtest.sh
-	ENVTEST_K8S_VERSION=${ENVTEST_K8S_VERSION}; . ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; \
-	fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
+test: setup-envtest generate; $(info  running $(NAME:%=% )tests...) @ ## Run tests
+	export KUBEBUILDER_ASSETS="$(shell $(SETUP_ENVTEST) use -p path $(ENVTEST_K8S_VERSION))" && \
+	go test ./... -coverprofile cover.out
 
 cov-report: gcov2lcov test ## Build test coverage report in lcov format
 	$(GCOV2LCOV) -infile cover.out -outfile lcov.info
@@ -89,6 +88,9 @@ golangci-lint: ## Download golangci-lint locally if necessary.
 
 gcov2lcov: ## Download gcov2lcov locally if necessary.
 	$(call go-install-tool,$(GCOV2LCOV),github.com/jandelgado/gcov2lcov@$(GCOV2LCOV_VERSION))
+
+setup-envtest: ## Download setup-envtest locally if necessary
+	$(call go-install-tool,$(SETUP_ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_RELEASE))
 
 # Generate an image for containerized builds
 # Note: This image is local only
