@@ -113,7 +113,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 					m.log.V(consts.LogLevelError).Error(err, "Failed to cordon node", "node", node.Name)
 					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
 					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-						"Failed to cordon the node, %s", err.Error())
+						fmt.Sprintf("Failed to cordon the node, %s", err.Error()))
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Cordoned the node", "node", node.Name)
@@ -123,7 +123,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 					m.log.V(consts.LogLevelError).Error(err, "Failed to drain node", "node", node.Name)
 					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
 					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
-						"Failed to drain the node, %s", err.Error())
+						fmt.Sprintf("Failed to drain the node, %s", err.Error()))
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Drained the node", "node", node.Name)
