@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade
+package base
 
 const (
 	// UpgradeStateLabelKeyFmt is the format of the node label key indicating driver upgrade states
