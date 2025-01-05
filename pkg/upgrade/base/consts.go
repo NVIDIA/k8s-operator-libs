@@ -53,6 +53,14 @@ const (
 	// UpgradeStateDrainRequired is set when the node is required to be scheduled for drain. After the drain the state
 	// is changed either to UpgradeStatePodRestartRequired or UpgradeStateFailed
 	UpgradeStateDrainRequired = "drain-required"
+	// UpgradeStateNodeMaintenanceRequired is set when UseMaintenanceOperator is true and maintenance operator exists.
+	// following state designates node operation states (e.g cordon, drain), since they will be handled externally
+	// by maintenance operator
+	UpgradeStateNodeMaintenanceRequired = "node-maintenance-required"
+	// UpgradeStatePostMaintenanceRequired is set when UseMaintenanceOperator is true and maintenance operator exists.
+	// in this case node maintenance operations will be performed externally by maintenance operator.
+	// this state designates requestor to perform post maintenance operations (e.g restart driver's pod etc')
+	UpgradeStatePostMaintenanceRequired = "post-maintenance-required"
 	// UpgradeStatePodRestartRequired is set when the driver pod on the node is scheduled for restart
 	// or when unblock of the driver loading is required (safe driver load)
 	UpgradeStatePodRestartRequired = "pod-restart-required"

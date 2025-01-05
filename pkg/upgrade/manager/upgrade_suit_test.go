@@ -19,8 +19,10 @@ package upgrade_test
 import (
 	"context"
 	"math/rand"
+	"path/filepath"
 	"testing"
 
+	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -42,6 +43,7 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/manager/mocks"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -72,16 +74,21 @@ var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	By("bootstrapping test environment")
-	testEnv = &envtest.Environment{}
+	testEnv = &envtest.Environment{
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
+	}
 
 	var err error
 	k8sConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
 
+	err = maintenancev1alpha1.AddToScheme(requestor.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: requestor.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 

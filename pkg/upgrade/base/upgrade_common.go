@@ -23,9 +23,10 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,6 +41,7 @@ type NodeUpgradeState struct {
 	Node            *corev1.Node
 	DriverPod       *corev1.Pod
 	DriverDaemonSet *appsv1.DaemonSet
+	NodeMaintenance *unstructured.Unstructured
 }
 
 // IsOrphanedPod returns true if Pod is not associated to a DaemonSet
@@ -58,6 +60,15 @@ type ClusterUpgradeState struct {
 // NewClusterUpgradeState creates an empty ClusterUpgradeState object
 func NewClusterUpgradeState() ClusterUpgradeState {
 	return ClusterUpgradeState{NodeStates: make(map[string][]*NodeUpgradeState)}
+}
+
+// ProcessNodeStateManager interface is used for abstracting both upgrade modes: inplace,
+// requestor (e.g. maintenance OP)
+// Similar node states are used in both modes, while changes are introduced within ApplyState Process<state>
+// methods to support both modes logic
+type ProcessNodeStateManager interface {
+	ProcessUpgradeRequiredNodes(ctx context.Context,
+		currentClusterState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error
 }
 
 // CommonUpgradeStateManager interface is a unified cluster upgrade abstraction for both upgrade modes
@@ -113,8 +124,9 @@ type CommonUpgradeManagerImpl struct {
 func NewCommonUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
+	scheme *runtime.Scheme,
 	eventRecorder record.EventRecorder) (*CommonUpgradeManagerImpl, error) {
-	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
 	if err != nil {
 		return &CommonUpgradeManagerImpl{}, fmt.Errorf("error creating k8s client: %v", err)
 	}
@@ -581,6 +593,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 
 	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
+		m.Log.V(consts.LogLevelInfo).Info("[DEBUG]: ProcessPodRestartNodes")
 		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
@@ -642,6 +655,21 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 
 	// Create pod restart manager to handle pod restarts
 	return m.PodManager.SchedulePodsRestart(ctx, pods)
+}
+
+// ProcessPostMaintenanceNodes processes UpgradeStatePostMaintenanceRequired
+// by adding UpgradeStatePodRestartRequired under existing UpgradeStatePodRestartRequired nodes list.
+// the motivation is later to replace ProcessPodRestartNodes to a generic post node operation
+// while using maintenance operator (e.g. post-maintenance-required)
+func (m *CommonUpgradeManagerImpl) ProcessPostMaintenanceNodes(
+	currentClusterState *ClusterUpgradeState) error {
+	m.Log.V(consts.LogLevelInfo).Info("ProcessPostMaintenanceNodes")
+	currentClusterState.NodeStates[UpgradeStatePodRestartRequired] =
+		append(currentClusterState.NodeStates[UpgradeStatePodRestartRequired],
+			currentClusterState.NodeStates[UpgradeStatePostMaintenanceRequired]...)
+	// clear UpgradeStatePostMaintenanceRequired list once copied to ProcessPostMaintenanceNodes
+	currentClusterState.NodeStates[UpgradeStatePostMaintenanceRequired] = nil
+	return nil
 }
 
 // ProcessUpgradeFailedNodes processes UpgradeStateFailed nodes and checks whether the driver pod on the node
