@@ -38,6 +38,41 @@ var _ = Describe("CRD Application", func() {
 		Expect(testCRDClient.DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})).NotTo(HaveOccurred())
 	})
 
+	Describe("collectYamlPaths", func() {
+		It("should collect all YAML files in a directory", func() {
+			By("collecting YAML paths")
+			paths, err := collectYamlPaths([]string{"test-files"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).To(ConsistOf(
+				"test-files/test-crds.yaml",
+				"test-files/updated-test-crds.yaml",
+			))
+		})
+
+		It("should collect a single YAML file", func() {
+			By("collecting YAML paths")
+			paths, err := collectYamlPaths([]string{"test-files/test-crds.yaml"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).To(ConsistOf("test-files/test-crds.yaml"))
+		})
+
+		It("should deduplicate YAML file", func() {
+			By("collecting YAML paths")
+			paths, err := collectYamlPaths([]string{"test-files/test-crds.yaml", "test-files"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).To(ConsistOf(
+				"test-files/test-crds.yaml",
+				"test-files/updated-test-crds.yaml",
+			))
+		})
+
+		It("should fail to collect non-existent YAML files", func() {
+			By("collecting YAML paths")
+			_, err := collectYamlPaths([]string{"test-files/non-existent.yaml"})
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
 	Describe("applyCRDs", func() {
 		It("should apply CRDs multiple times from a valid YAML file", func() {
 			By("applying CRDs")

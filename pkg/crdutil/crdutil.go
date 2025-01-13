@@ -39,23 +39,21 @@ import (
 )
 
 var (
-	filenames []string
-	recursive bool
+	crdsDir []string
 )
 
 func initFlags() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	pflag.StringSliceVarP(&filenames, "filename", "f", filenames, "The files that contain the configurations to apply.")
-	pflag.BoolVarP(&recursive, "recursive", "R", false, "Process the directory used in -f, --filename recursively.")
+	pflag.StringSliceVarP(&crdsDir, "crds-dir", "f", crdsDir, "The files or directories that contain the CRDs to apply.")
 	pflag.Parse()
 
-	if len(filenames) == 0 {
+	if len(crdsDir) == 0 {
 		log.Fatalf("CRDs directory or single CRDs are required")
 	}
 
-	for _, crdDir := range filenames {
-		if _, err := os.Stat(crdDir); os.IsNotExist(err) {
-			log.Fatalf("CRDs directory %s does not exist", filenames)
+	for _, path := range crdsDir {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			log.Fatalf("path does not exist: %s", path)
 		}
 	}
 }
@@ -78,30 +76,32 @@ func EnsureCRDsCmd() {
 		log.Fatalf("Failed to create API extensions client: %v", err)
 	}
 
-	dirsToApply, err := walkCRDs(recursive, filenames)
+	pathsToApply, err := collectYamlPaths(crdsDir)
 	if err != nil {
 		log.Fatalf("Failed to walk through CRDs: %v", err)
 	}
 
-	for _, dir := range dirsToApply {
-		log.Printf("Apply CRDs from file: %s", dir)
-		if err := applyCRDs(ctx, client.ApiextensionsV1().CustomResourceDefinitions(), dir); err != nil {
+	for _, path := range pathsToApply {
+		log.Printf("Apply CRDs from file: %s", path)
+		if err := applyCRDs(ctx, client.ApiextensionsV1().CustomResourceDefinitions(), path); err != nil {
 			log.Fatalf("Failed to apply CRDs: %v", err)
 		}
 	}
 }
 
-// walkCRDs walks the CRDs directory and applies each YAML file.
-// TODO: add unit test  for this function.
-func walkCRDs(recursive bool, crdDirs []string) ([]string, error) {
-	var dirs []string
+// collectYamlPaths processes a list of paths and returns all YAML files.
+func collectYamlPaths(crdDirs []string) ([]string, error) {
+	paths := map[string]struct{}{}
 	for _, crdDir := range crdDirs {
 		// We need the parent directory to check if we are in the top-level directory.
 		// This is necessary for the recursive logic.
 		// We can skip the errors as it has been checked in initFlags.
-		parentDir, _ := os.Stat(crdDir)
+		parentDir, err := os.Stat(crdDir)
+		if err != nil {
+			return []string{}, fmt.Errorf("stat the path %s: %w", crdDir, err)
+		}
 		// Walk the directory recursively and apply each YAML file.
-		err := filepath.Walk(crdDir, func(path string, info os.FileInfo, err error) error {
+		err = filepath.Walk(crdDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -113,20 +113,30 @@ func walkCRDs(recursive bool, crdDirs []string) ([]string, error) {
 			if filepath.Ext(path) != ".yaml" && filepath.Ext(path) != ".yml" {
 				return nil
 			}
-			// If not recursive we want to only apply the CRDs in the top-level directory.
+			// If we apply a dir we only want to apply the CRDs in the directory (i.e., not recursively).
 			// filepath.Dir() does not add a trailing slash, thus we need to trim it in the crdDir.
-			if !recursive && parentDir.IsDir() && filepath.Dir(path) != strings.TrimRight(crdDir, "/") {
+			if parentDir.IsDir() && filepath.Dir(path) != strings.TrimRight(crdDir, "/") {
 				return nil
 			}
 
-			dirs = append(dirs, path)
+			paths[path] = struct{}{}
 			return nil
 		})
 		if err != nil {
 			return []string{}, fmt.Errorf("walk the path %s: %w", crdDirs, err)
 		}
 	}
-	return dirs, nil
+	return mapToSlice(paths), nil
+}
+
+// mapToSlice converts a map to a slice.
+// The map is used to deduplicate the paths.
+func mapToSlice(m map[string]struct{}) []string {
+	s := []string{}
+	for k := range m {
+		s = append(s, k)
+	}
+	return s
 }
 
 // applyCRDs reads a YAML file, splits it into documents, and applies each CRD to the cluster.
@@ -183,7 +193,7 @@ func applyCRD(
 		log.Printf("Create CRD %s", crd.Name)
 		_, err = crdClient.Create(ctx, crd, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("create CRD %s: %w", crd.Name, err)
+			return fmt.Errorf("create CRD: %w", err)
 		}
 		return nil
 	}
