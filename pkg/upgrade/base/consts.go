@@ -73,6 +73,8 @@ const (
 	UpgradeStateDone = "upgrade-done"
 	// UpgradeStateFailed is set when there are any failures during the driver upgrade
 	UpgradeStateFailed = "upgrade-failed"
+	// TODO: UpgradeValidationRequestorModeAnnotationKeyFmt
+	UpgradeValidationRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
 )
 
 const (

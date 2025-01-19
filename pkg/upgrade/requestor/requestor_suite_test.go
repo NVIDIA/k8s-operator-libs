@@ -20,6 +20,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -31,7 +32,10 @@ import (
 
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
@@ -98,6 +102,7 @@ var _ = BeforeSuite(func() {
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	err := testEnv.Stop()
+	log.Error(err, "failed test")
 	Expect(err).NotTo(HaveOccurred())
 })
 
@@ -171,6 +176,65 @@ func (n Node) Create() *corev1.Node {
 	Expect(err).NotTo(HaveOccurred())
 	createdObjects = append(createdObjects, node)
 	return node
+}
+
+type NodeMaintenance struct {
+	*maintenancev1alpha1.NodeMaintenance
+}
+
+func NewNodeMaintenance(name, nodeName string) NodeMaintenance {
+	status := maintenancev1alpha1.NodeMaintenanceStatus{
+		Conditions: []metav1.Condition{{
+			Type:               maintenancev1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             maintenancev1alpha1.ConditionReasonReady,
+			Message:            "Maintenance completed successfully",
+			LastTransitionTime: metav1.NewTime(time.Now()),
+		}},
+	}
+	nm := &maintenancev1alpha1.NodeMaintenance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  "default",
+			Labels:     map[string]string{"hello": "world"},
+			Finalizers: []string{requestor.MaintenanceOPFinalizerName},
+		},
+		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
+			RequestorID: requestor.MaintenanceOPRequestorID,
+			NodeName:    nodeName,
+		},
+		Status: status,
+	}
+	Expect(nm.Status.Conditions).NotTo(BeNil())
+	return NodeMaintenance{nm}
+}
+
+func (n NodeMaintenance) Create() *unstructured.Unstructured {
+	nm := n.NodeMaintenance
+	err := k8sClient.Create(context.TODO(), nm)
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, nm)
+
+	obj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
+	return &unstructured.Unstructured{Object: obj}
+}
+
+func removeFinalizersOrDelete(ctx context.Context, nm *maintenancev1alpha1.NodeMaintenance) error {
+	var err error
+	instanceFinalizers := nm.GetFinalizers()
+	if len(instanceFinalizers) == 0 {
+		err = k8sClient.Delete(ctx, nm)
+		return err
+	}
+
+	nm.SetFinalizers([]string{})
+	err = k8sClient.Update(ctx, nm)
+	if err != nil && k8serrors.IsNotFound(err) {
+		err = nil
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	return err
 }
 
 func getNodeUpgradeState(node *corev1.Node) string {

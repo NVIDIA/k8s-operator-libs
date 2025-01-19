@@ -19,9 +19,11 @@ package requestor
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	//nolint:depguard
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -73,6 +75,10 @@ func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeStat
 	m.Log.V(consts.LogLevelInfo).Info("creating node maintenance", nodeState.Node.Name, nm.Name)
 	err = m.K8sClient.Create(ctx, nm, &client.CreateOptions{})
 	if err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			m.Log.V(consts.LogLevelError).Error(err, "nodeMaintenance")
+			return nil
+		}
 		return fmt.Errorf("failed to create node maintenance '%+v'. %v", nm, err)
 	}
 
@@ -80,19 +86,19 @@ func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeStat
 }
 
 // DeleteNodeMaintenance requests to delete nodeMaintenance obj
-func (m *UpgradeManagerImpl) DeleteNodeMaintenance(nodeState *base.NodeUpgradeState) error {
+func (m *UpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context, nodeState *base.NodeUpgradeState) error {
 	curObj, err := validateNodeMaintenance(nodeState)
 	if err != nil {
 		return err
 	}
 	nm := &maintenancev1alpha1.NodeMaintenance{}
-	err = m.K8sClient.Get(context.TODO(), types.NamespacedName{Name: curObj.Name, Namespace: curObj.Namespace},
+	err = m.K8sClient.Get(ctx, types.NamespacedName{Name: curObj.Name, Namespace: curObj.Namespace},
 		nm, &client.GetOptions{})
 	if err != nil {
 		return err
 	}
 	// send deletion request assuming maintenance OP will handle actual obj deletion
-	err = m.K8sClient.Delete(context.TODO(), nm, &client.DeleteOptions{})
+	err = m.K8sClient.Delete(ctx, nm)
 	if err != nil {
 		return err
 	}
@@ -101,7 +107,8 @@ func (m *UpgradeManagerImpl) DeleteNodeMaintenance(nodeState *base.NodeUpgradeSt
 
 // TODO
 func getNodeMaintenanceName(nodeState *base.NodeUpgradeState) string {
-	return nodeState.Node.Name // TODO: Need to set naming convention
+	// TODO: Need to consider naming convention
+	return fmt.Sprintf("node-maintenance-%s", strings.TrimPrefix(nodeState.Node.Name, "node"))
 }
 
 func validateNodeMaintenance(nodeState *base.NodeUpgradeState) (*maintenancev1alpha1.NodeMaintenance, error) {

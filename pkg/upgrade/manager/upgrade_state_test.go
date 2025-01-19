@@ -1249,7 +1249,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(base.UpgradeStateFailed))
 	})
 
-	It("UpgradeStateManager should use upgrade requestor mode", func() {
+	It("UpgradeStateManager should move to post-maintenance-required while using upgrade requestor mode", func() {
 		cancel := withUpgradeRequestorMode(ctx, id)
 		defer cancel()
 		daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
@@ -1276,23 +1276,70 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 		Expect(stateManagerInterface.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 
-		nm := &maintenancev1alpha1.NodeMaintenance{}
-		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: requestor.MaintenanceOPRequestorNS, Name: "node1"}, nm, &client.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
+		By("verify generated node-maintenance obj(s)")
+		nms := &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(ctx, nms)
+			return len(nms.Items) == len(clusterState.NodeStates[base.UpgradeStateUpgradeRequired])
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
 
-		status := maintenancev1alpha1.NodeMaintenanceStatus{
-			Conditions: []v1.Condition{{
-				Type:               maintenancev1alpha1.ConditionTypeReady,
-				Status:             v1.ConditionTrue,
-				Reason:             maintenancev1alpha1.ConditionReasonReady,
-				Message:            "Maintenance completed successfully",
-				LastTransitionTime: v1.NewTime(time.Now()),
-			}},
+		By("set node-maintenance(s) finalizer to mimic maintenance-operator obj deletion ownership")
+		for _, item := range nms.Items {
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+			Expect(err).NotTo(HaveOccurred())
+
+			nm.Finalizers = append(nm.Finalizers, requestor.MaintenanceOPFinalizerName)
+			err = k8sClient.Update(ctx, nm)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() error {
+				nm := &maintenancev1alpha1.NodeMaintenance{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+				if err != nil {
+					return err
+				}
+				if len(nm.Finalizers) == 0 {
+					return fmt.Errorf("missing status condition")
+				}
+				return nil
+			}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
 		}
-		nm.Status = status
-		err = k8sClient.Status().Update(ctx, nm)
-		Expect(err).NotTo(HaveOccurred())
 
+		By("set node-maintenance(s) status to mimic maintenance-operator 'Ready' condition flow")
+		for _, item := range nms.Items {
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+			Expect(err).NotTo(HaveOccurred())
+
+			status := maintenancev1alpha1.NodeMaintenanceStatus{
+				Conditions: []v1.Condition{{
+					Type:               maintenancev1alpha1.ConditionTypeReady,
+					Status:             v1.ConditionTrue,
+					Reason:             maintenancev1alpha1.ConditionReasonReady,
+					Message:            "Maintenance completed successfully",
+					LastTransitionTime: v1.NewTime(time.Now()),
+				}},
+			}
+			nm.Status = status
+			err = k8sClient.Status().Update(ctx, nm)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		// verify status is updated
+		for _, item := range nms.Items {
+			Eventually(func() error {
+				nm := &maintenancev1alpha1.NodeMaintenance{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+				if err != nil {
+					return err
+				}
+				if len(nm.Status.Conditions) == 0 {
+					return fmt.Errorf("missing status condition")
+				}
+				return nil
+			}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+		}
+		By("verify node is in post-maintennace-required' state")
 		node := &corev1.Node{}
 		Eventually(func() error {
 			err := k8sClient.Get(ctx, client.ObjectKey{Name: "node1", Namespace: "default"}, node)
@@ -1304,7 +1351,6 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			}
 			return nil
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
-		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("UpgradeStateManager should restart Orphaned pod in upgrade requestor mode", func() {
@@ -1339,8 +1385,11 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				return nil
 			})
 		stateManager.PodManager = &podManagerMock
-
 		Expect(stateManagerInterface.ApplyState(ctx, &clusterState, policy)).To(Succeed())
+	})
+
+	It("UpgradeStateManager todo: with upgrade requestor mode", func() {
+		//TODO: check that legacy flow continues for cordon-required/pod-restart-required
 	})
 
 })
