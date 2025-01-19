@@ -27,13 +27,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 )
+
+var maxCreatedNodes = 5
 
 var _ = Describe("NodeMaintenance Controller", func() {
 	var (
@@ -59,30 +61,6 @@ var _ = Describe("NodeMaintenance Controller", func() {
 	BeforeEach(func() {
 		ctx = context.TODO()
 		id = randSeq(5)
-		// create node objects for scheduler to use
-		By("create test nodes")
-		upgradeRequired := []*base.NodeUpgradeState{
-			{Node: NewNode("node1").WithUpgradeState(base.UpgradeStateUpgradeRequired).Node},
-			{Node: NewNode("node2").WithUpgradeState(base.UpgradeStateUpgradeRequired).Node},
-			{Node: NewNode("node3").WithUpgradeState(base.UpgradeStateUpgradeRequired).Node},
-			{Node: NewNode("node4").WithUpgradeState(base.UpgradeStateUpgradeRequired).Node},
-		}
-		upgradeUnknown := []*base.NodeUpgradeState{
-			{Node: NewNode("node5").WithUpgradeState(base.UpgradeStateUnknown).Node},
-		}
-
-		currentClusterState = &base.ClusterUpgradeState{
-			NodeStates: map[string][]*base.NodeUpgradeState{
-				base.UpgradeStateUpgradeRequired: upgradeRequired,
-				base.UpgradeStateUnknown:         upgradeUnknown,
-			},
-		}
-
-		_ = NewNode("node1").WithUpgradeState(base.UpgradeStateUpgradeRequired).Create()
-		_ = NewNode("node2").WithUpgradeState(base.UpgradeStateUpgradeRequired).Create()
-		_ = NewNode("node3").WithUpgradeState(base.UpgradeStateUpgradeRequired).Create()
-		_ = NewNode("node4").WithUpgradeState(base.UpgradeStateUpgradeRequired).Create()
-		_ = NewNode("node5").WithUpgradeState(base.UpgradeStateUpgradeRequired).Create()
 
 		// setup reconciler with manager
 		By("create and start requstor upgrade manager")
@@ -99,33 +77,56 @@ var _ = Describe("NodeMaintenance Controller", func() {
 
 	AfterEach(func() {
 		By("Cleanup NodeMaintenance resources")
-		for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
-			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(nodeState.Node), nodeState.Node)
-			if err == nil {
-				// delete obj
-				err = k8sClient.Delete(ctx, nodeState.Node)
+		Eventually(func() bool {
+			nodes := &corev1.NodeList{}
+			err := k8sClient.List(ctx, nodes)
+			if err != nil && k8serrors.IsNotFound(err) {
+				return true
+			}
+			Expect(err).NotTo(HaveOccurred())
+			if len(nodes.Items) == 0 {
+				return true
+			}
+			Expect(err).NotTo(HaveOccurred())
+			for _, item := range nodes.Items {
+				err = k8sClient.Delete(ctx, &item)
 				if err != nil && k8serrors.IsNotFound(err) {
 					err = nil
 				}
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 			}
-			if nodeState.NodeMaintenance != nil {
-				nm := &maintenancev1alpha1.NodeMaintenance{}
-				runtime.DefaultUnstructuredConverter.FromUnstructured(nodeState.NodeMaintenance.Object, nm)
-				err = k8sClient.Delete(ctx, nm)
-				if err != nil && k8serrors.IsNotFound(err) {
-					err = nil
-					Expect(err).NotTo(HaveOccurred())
-				}
+			return false
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		Eventually(func() bool {
+			nms := &maintenancev1alpha1.NodeMaintenanceList{}
+			err := k8sClient.List(ctx, nms)
+			if err != nil && k8serrors.IsNotFound(err) {
+				return true
 			}
-		}
-		cancel()
+			Expect(err).NotTo(HaveOccurred())
+			if len(nms.Items) == 0 {
+				return true
+			}
+			for _, item := range nms.Items {
+				err = removeFinalizersOrDelete(ctx, &item)
+				Expect(err).NotTo(HaveOccurred())
+			}
+			return false
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		DeferCleanup(func() {
+			By("Shut down controller manager")
+			cancel()
+		})
 	})
 
 	It("verify created node maintenance(s)", func() {
+		By("create test nodes")
+		currentClusterState = newClusterState(false, base.UpgradeStateUpgradeRequired)
+
 		err := reqMngr.ProcessUpgradeRequiredNodes(ctx, currentClusterState, policy)
 		Expect(err).NotTo(HaveOccurred())
-
 		nms := &maintenancev1alpha1.NodeMaintenanceList{}
 		Eventually(func() bool {
 			k8sClient.List(ctx, nms)
@@ -134,6 +135,14 @@ var _ = Describe("NodeMaintenance Controller", func() {
 	})
 
 	It("node maintenance status condition check", func() {
+		By("create test nodes")
+		currentClusterState = newClusterState(false, base.UpgradeStateUpgradeRequired)
+		nodes := &corev1.NodeList{}
+		Eventually(func() bool {
+			k8sClient.List(ctx, nodes)
+			return len(nodes.Items) == maxCreatedNodes
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
 		err := reqMngr.ProcessUpgradeRequiredNodes(ctx, currentClusterState, policy)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -142,6 +151,14 @@ var _ = Describe("NodeMaintenance Controller", func() {
 			k8sClient.List(ctx, nms)
 			return len(nms.Items) == len(currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired])
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		for _, item := range nms.Items {
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			Eventually(func() bool {
+				k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+				return len(nm.Finalizers) == 0
+			}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+		}
 
 		status := maintenancev1alpha1.NodeMaintenanceStatus{
 			Conditions: []metav1.Condition{{
@@ -152,28 +169,38 @@ var _ = Describe("NodeMaintenance Controller", func() {
 				LastTransitionTime: metav1.NewTime(time.Now()),
 			}},
 		}
+		By("set node-maintenance(s) finalizer")
+		for _, item := range nms.Items {
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+			Expect(err).NotTo(HaveOccurred())
+
+			nm.Finalizers = append(nm.Finalizers, requestor.MaintenanceOPFinalizerName)
+			err = reqMngr.K8sClient.Update(ctx, nm)
+			Expect(err).NotTo(HaveOccurred())
+			condition := func(nm *maintenancev1alpha1.NodeMaintenance) bool {
+				return len(nm.Finalizers) == 0
+			}
+			Eventually(verifyNodeMaintenanceStatus(ctx, item.Name, condition)).
+				WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+		}
 
 		for _, item := range nms.Items {
-			item.Status = status
-			err = reqMngr.K8sClient.Status().Update(ctx, &item)
-
-			Eventually(func() error {
-				nm := &maintenancev1alpha1.NodeMaintenance{}
-				err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
-				if err != nil {
-					return err
-				}
-				if len(nm.Status.Conditions) == 0 {
-					return fmt.Errorf("missing status condition")
-				}
-				return nil
-
-			}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
 			Expect(err).NotTo(HaveOccurred())
+			nm.Status = status
+			err = reqMngr.K8sClient.Status().Update(ctx, nm)
+			Expect(err).NotTo(HaveOccurred())
+			conditionFn := func(nm *maintenancev1alpha1.NodeMaintenance) bool {
+				return len(nm.Status.Conditions) == 0
+			}
+			Eventually(verifyNodeMaintenanceStatus(ctx, item.Name, conditionFn)).
+				WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
 
 			node := &corev1.Node{}
 			Eventually(func() error {
-				err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, node)
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Spec.NodeName, Namespace: "default"}, node)
 				if err != nil {
 					return err
 				}
@@ -183,8 +210,100 @@ var _ = Describe("NodeMaintenance Controller", func() {
 				return nil
 			}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
 			Expect(err).NotTo(HaveOccurred())
+			//Eventually(verifyNodeState(ctx, item.Spec.NodeName, base.UpgradeStatePostMaintenanceRequired)).
+			//	WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+		}
+	})
 
+	It("node maintenance watch deleted objects", func() {
+		var err error
+		By("create test nodes")
+		currentClusterState = newClusterState(true, base.UpgradeStateUncordonRequired)
+		nms := &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(ctx, nms)
+			return len(nms.Items) == len(currentClusterState.NodeStates[base.UpgradeStateUncordonRequired])
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		err = reqMngr.ProcessUncordonRequiredNodes(ctx, currentClusterState)
+		Expect(err).NotTo(HaveOccurred())
+
+		nms = &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(ctx, nms)
+			return len(nms.Items) == len(currentClusterState.NodeStates[base.UpgradeStateUncordonRequired])
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		By("remove node-maintenance finalizers")
+		for _, item := range nms.Items {
+			nm := &maintenancev1alpha1.NodeMaintenance{}
+			Expect(len(item.Finalizers)).To(Equal(1))
+			err := k8sClient.Get(ctx, client.ObjectKey{Name: item.Name, Namespace: "default"}, nm)
+			Expect(err).NotTo(HaveOccurred())
+			nm.Finalizers = []string{}
+			err = k8sClient.Update(ctx, nm)
+			Expect(err).NotTo(HaveOccurred())
 		}
 
+		for _, item := range nms.Items {
+			Eventually(verifyNodeState(ctx, item.Spec.NodeName, base.UpgradeStateDone)).
+				WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+		}
 	})
 })
+
+func newClusterState(shouldCreate bool, state string) *base.ClusterUpgradeState {
+	var upgradeState []*base.NodeUpgradeState
+
+	offset := randRange(100, 999)
+	for i := 1; i < maxCreatedNodes; i++ {
+
+		upgradeState = append(upgradeState, &base.NodeUpgradeState{
+			Node:            NewNode(fmt.Sprintf("node%d", offset+i)).WithUpgradeState(state).Create(),
+			NodeMaintenance: newNodeMaintenance(shouldCreate, offset+i),
+		})
+	}
+	upgradeUnknown := []*base.NodeUpgradeState{
+		{Node: NewNode(fmt.Sprintf("node%d", 10)).WithUpgradeState(base.UpgradeStateUnknown).Create()},
+	}
+
+	return &base.ClusterUpgradeState{
+		NodeStates: map[string][]*base.NodeUpgradeState{
+			state:                    upgradeState,
+			base.UpgradeStateUnknown: upgradeUnknown,
+		},
+	}
+}
+
+func newNodeMaintenance(shouldCreate bool, id int) *unstructured.Unstructured {
+	if shouldCreate {
+		return NewNodeMaintenance(fmt.Sprintf("node-maintenance-%d", id), fmt.Sprintf("node%d", id)).Create()
+	}
+	return nil
+}
+
+func verifyNodeState(ctx context.Context, name, state string) error {
+	node := &corev1.Node{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: "default"}, node)
+	if err != nil {
+		return err
+	}
+	if getNodeUpgradeState(node) != state {
+		return fmt.Errorf("missing status condition")
+	}
+	return nil
+}
+
+func verifyNodeMaintenanceStatus(ctx context.Context, name string,
+	condition func(nm *maintenancev1alpha1.NodeMaintenance) bool) error {
+	nm := &maintenancev1alpha1.NodeMaintenance{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: "default"}, nm)
+	if err != nil {
+		return err
+	}
+	if condition(nm) {
+		return fmt.Errorf("missing status condition")
+	}
+	return nil
+
+}

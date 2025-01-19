@@ -38,6 +38,7 @@ var (
 	// UseMaintenanceOperator enables requestor updrade mode
 	UseMaintenanceOperator            bool
 	MaintenanceOPRequestorID          = "nvidia.operator.com"
+	MaintenanceOPFinalizerName        = "maintenance.nvidia.com/finalizer"
 	MaintenanceOPRequestorNS          string
 	MaintenanceOPPodEvictionFilter    *string
 	MaintenanceOPControllerName       = "node-maintenance"
@@ -106,7 +107,7 @@ func (m *UpgradeManagerImpl) Start(ctx context.Context) {
 	go func() {
 		err := m.WatchNodeMaintenanceConditionChange(ctx)
 		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(err, "failed to update node condition")
+			m.Log.V(consts.LogLevelWarning).Error(err, "failed to update node condition")
 		}
 	}()
 }
@@ -122,7 +123,7 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
 		err := m.CreateNodeMaintenance(ctx, nodeState)
 		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(err, "Failed to create nodeMaintenance")
+			m.Log.V(consts.LogLevelError).Error(err, "failed to create nodeMaintenance")
 			return err
 		}
 		// update node state to 'node-maintenance-required'
@@ -135,9 +136,27 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	return nil
 }
 
+func (m *UpgradeManagerImpl) ProcessUncordonRequiredNodes(
+	ctx context.Context, currentClusterState *base.ClusterUpgradeState) error {
+	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
+
+	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUncordonRequired] {
+		m.Log.V(consts.LogLevelDebug).Info("deleting node maintenance",
+			nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
+		err := m.DeleteNodeMaintenance(ctx, nodeState)
+		if err != nil {
+			m.Log.V(consts.LogLevelWarning).Error(
+				err, "Node uncordon failed", "node", nodeState.Node)
+			return err
+		}
+	}
+	return nil
+}
+
 // WatchNodeMaintenanceConditionChange waits for nodeMaintenance status change by reconciler
 // in case of status change, fetch referenced node and update post maintenance state
 func (m *UpgradeManagerImpl) WatchNodeMaintenanceConditionChange(ctx context.Context) error {
+	m.Log.V(consts.LogLevelInfo).Info("starting node-maintenance condition change watcher")
 	for {
 		select {
 		case <-ctx.Done():
@@ -150,18 +169,31 @@ func (m *UpgradeManagerImpl) WatchNodeMaintenanceConditionChange(ctx context.Con
 				// Channel is closed
 				return nil
 			}
+			node, err := m.NodeUpgradeStateProvider.GetNode(ctx, cond.NodeName)
+			if err != nil {
+				m.Log.V(consts.LogLevelError).Error(err, "failed to find node")
+				continue
+			}
+			if cond.Reason == "deleting" {
+				//TODO: add handler func handleNodeMaintenanceDeletion(node)
+				upgradeStateLabel := base.GetUpgradeStateLabelKey()
+				m.Log.V(consts.LogLevelInfo).Info("handle NodeMaintenance deletion", node.Name, node.Labels[upgradeStateLabel])
+				if node.Labels[upgradeStateLabel] == base.UpgradeStateUncordonRequired {
+					err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateDone)
+					if err != nil {
+						m.Log.V(consts.LogLevelError).Error(err, "failed to update node state")
+						continue
+					}
+				}
+			}
 			// verify node maintenance operation completed
 			// node should enter post maintenance state
 			if cond.Reason == maintenancev1alpha1.ConditionReasonReady {
-				node, err := m.NodeUpgradeStateProvider.GetNode(ctx, cond.Name)
-				if err != nil {
-					return fmt.Errorf("failed to find node. %v", err)
-				}
+				m.Log.V(consts.LogLevelDebug).Info("handle NodeMaintenance update", node.Name, cond.NodeName)
 				// update node state to 'post-maintenance-required'
 				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePostMaintenanceRequired)
 				if err != nil {
 					m.Log.V(consts.LogLevelError).Error(err, "failed to update node state")
-					return fmt.Errorf("failed to update node state. %v", err)
 				}
 			}
 		}

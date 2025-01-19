@@ -69,14 +69,12 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 type ProcessNodeStateManager interface {
 	ProcessUpgradeRequiredNodes(ctx context.Context,
 		currentClusterState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error
+	ProcessUncordonRequiredNodes(
+		ctx context.Context, currentClusterState *ClusterUpgradeState) error
 }
 
 // CommonUpgradeStateManager interface is a unified cluster upgrade abstraction for both upgrade modes
-//
-//nolint:interfacebloat
 type CommonUpgradeStateManager interface {
-	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
-	BuildState(ctx context.Context, namespace string, driverLabels map[string]string) (*ClusterUpgradeState, error)
 	// GetTotalManagedNodes returns the total count of nodes managed for driver upgrades
 	GetTotalManagedNodes(ctx context.Context, currentState *ClusterUpgradeState) int
 	// GetUpgradesInProgress returns count of nodes on which upgrade is in progress
@@ -213,77 +211,9 @@ func (m *CommonUpgradeManagerImpl) GetCurrentUnavailableNodes(ctx context.Contex
 	return unavailableNodes
 }
 
-// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
-func (m *CommonUpgradeManagerImpl) BuildState(ctx context.Context, namespace string,
-	driverLabels map[string]string) (*ClusterUpgradeState, error) {
-	m.Log.V(consts.LogLevelInfo).Info("Building state")
-
-	upgradeState := NewClusterUpgradeState()
-
-	daemonSets, err := m.getDriverDaemonSets(ctx, namespace, driverLabels)
-	if err != nil {
-		m.Log.V(consts.LogLevelError).Error(err, "Failed to get driver DaemonSet list")
-		return nil, err
-	}
-
-	m.Log.V(consts.LogLevelDebug).Info("Got driver DaemonSets", "length", len(daemonSets))
-
-	// Get list of driver pods
-	podList := &corev1.PodList{}
-
-	err = m.K8sClient.List(ctx, podList,
-		client.InNamespace(namespace),
-		client.MatchingLabels(driverLabels),
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	filteredPodList := []corev1.Pod{}
-	for _, ds := range daemonSets {
-		dsPods := m.getPodsOwnedbyDs(ds, podList.Items)
-		if int(ds.Status.DesiredNumberScheduled) != len(dsPods) {
-			m.Log.V(consts.LogLevelInfo).Info("Driver DaemonSet has Unscheduled pods", "name", ds.Name)
-			return nil, fmt.Errorf("driver DaemonSet should not have Unscheduled pods")
-		}
-		filteredPodList = append(filteredPodList, dsPods...)
-	}
-
-	// Collect also orphaned driver pods
-	filteredPodList = append(filteredPodList, m.getOrphanedPods(podList.Items)...)
-
-	upgradeStateLabel := GetUpgradeStateLabelKey()
-
-	for i := range filteredPodList {
-		pod := &filteredPodList[i]
-		var ownerDaemonSet *appsv1.DaemonSet
-		if isOrphanedPod(pod) {
-			ownerDaemonSet = nil
-		} else {
-			ownerDaemonSet = daemonSets[pod.OwnerReferences[0].UID]
-		}
-		// Check if pod is already scheduled to a Node
-		if pod.Spec.NodeName == "" && pod.Status.Phase == corev1.PodPending {
-			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
-			continue
-		}
-		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet)
-		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod)
-			return nil, err
-		}
-		nodeStateLabel := nodeState.Node.Labels[upgradeStateLabel]
-		upgradeState.NodeStates[nodeStateLabel] = append(
-			upgradeState.NodeStates[nodeStateLabel], nodeState)
-	}
-
-	return &upgradeState, nil
-}
-
-// buildNodeUpgradeState creates a mapping between a node,
+// BuildNodeUpgradeState creates a mapping between a node,
 // the driver POD running on them and the daemon set, controlling this pod
-func (m *CommonUpgradeManagerImpl) buildNodeUpgradeState(
+func (m *CommonUpgradeManagerImpl) BuildNodeUpgradeState(
 	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
 	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
 	if err != nil {
@@ -297,8 +227,8 @@ func (m *CommonUpgradeManagerImpl) buildNodeUpgradeState(
 	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds}, nil
 }
 
-// getDriverDaemonSets retrieves DaemonSets with given labels and returns UID->DaemonSet map
-func (m *CommonUpgradeManagerImpl) getDriverDaemonSets(ctx context.Context, namespace string,
+// GetDriverDaemonSets retrieves DaemonSets with given labels and returns UID->DaemonSet map
+func (m *CommonUpgradeManagerImpl) GetDriverDaemonSets(ctx context.Context, namespace string,
 	labels map[string]string) (map[types.UID]*appsv1.DaemonSet, error) {
 	// Get list of driver pods
 	daemonSetList := &appsv1.DaemonSetList{}
@@ -319,12 +249,12 @@ func (m *CommonUpgradeManagerImpl) getDriverDaemonSets(ctx context.Context, name
 	return daemonSetMap, nil
 }
 
-// getPodsOwnedbyDs returns a list of the pods owned by the specified DaemonSet
-func (m *CommonUpgradeManagerImpl) getPodsOwnedbyDs(ds *appsv1.DaemonSet, pods []corev1.Pod) []corev1.Pod {
+// GetPodsOwnedbyDs returns a list of the pods owned by the specified DaemonSet
+func (m *CommonUpgradeManagerImpl) GetPodsOwnedbyDs(ds *appsv1.DaemonSet, pods []corev1.Pod) []corev1.Pod {
 	dsPodList := []corev1.Pod{}
 	for i := range pods {
 		pod := &pods[i]
-		if isOrphanedPod(pod) {
+		if IsOrphanedPod(pod) {
 			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no owner DaemonSet", "pod", pod.Name)
 			continue
 		}
@@ -340,12 +270,12 @@ func (m *CommonUpgradeManagerImpl) getPodsOwnedbyDs(ds *appsv1.DaemonSet, pods [
 	return dsPodList
 }
 
-// getOrphanedPods returns a list of the pods not owned by any DaemonSet
-func (m *CommonUpgradeManagerImpl) getOrphanedPods(pods []corev1.Pod) []corev1.Pod {
+// GetOrphanedPods returns a list of the pods not owned by any DaemonSet
+func (m *CommonUpgradeManagerImpl) GetOrphanedPods(pods []corev1.Pod) []corev1.Pod {
 	podList := []corev1.Pod{}
 	for i := range pods {
 		pod := &pods[i]
-		if isOrphanedPod(pod) {
+		if IsOrphanedPod(pod) {
 			podList = append(podList, *pod)
 		}
 	}
@@ -353,7 +283,7 @@ func (m *CommonUpgradeManagerImpl) getOrphanedPods(pods []corev1.Pod) []corev1.P
 	return podList
 }
 
-func isOrphanedPod(pod *corev1.Pod) bool {
+func IsOrphanedPod(pod *corev1.Pod) bool {
 	return pod.OwnerReferences == nil || len(pod.OwnerReferences) < 1
 }
 
