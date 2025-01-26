@@ -19,7 +19,6 @@ package requestor
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	//nolint:depguard
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
@@ -40,15 +39,15 @@ var (
 	defaultNodeMaintenance maintenancev1alpha1.NodeMaintenance
 )
 
-func SetDefaultNodeMaintenance(cordon bool,
+func SetDefaultNodeMaintenance(namespace, requestorID string, cordon bool,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) {
 	drainSpec, podCompletion := convertV1Alpha1ToMaintenance(upgradePolicy)
 	defaultNodeMaintenance = maintenancev1alpha1.NodeMaintenance{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: MaintenanceOPRequestorNS,
+			Namespace: namespace,
 		},
 		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
-			RequestorID:          MaintenanceOPRequestorID,
+			RequestorID:          requestorID,
 			Cordon:               cordon,
 			WaitForPodCompletion: podCompletion,
 			DrainSpec:            drainSpec,
@@ -56,9 +55,9 @@ func SetDefaultNodeMaintenance(cordon bool,
 	}
 }
 
-func (m *UpgradeManagerImpl) NewNodeMaintenance(name, nodeName string) *maintenancev1alpha1.NodeMaintenance {
+func (m *UpgradeManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
 	nm := defaultNodeMaintenance
-	nm.Name = name
+	nm.Name = nodeName
 	nm.Spec.NodeName = nodeName
 
 	return &nm
@@ -66,7 +65,7 @@ func (m *UpgradeManagerImpl) NewNodeMaintenance(name, nodeName string) *maintena
 
 // CreateNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
 func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeState *base.NodeUpgradeState) error {
-	nm := m.NewNodeMaintenance(getNodeMaintenanceName(nodeState), nodeState.Node.Name)
+	nm := m.NewNodeMaintenance(nodeState.Node.Name)
 	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
 	if err != nil {
 		return fmt.Errorf("failed to convert maintenancev1alpha1.NodeMaintenance to unstructured: %v", err)
@@ -83,6 +82,24 @@ func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeStat
 	}
 
 	return nil
+}
+
+// GetNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
+func (m *UpgradeManagerImpl) GetNodeMaintenance(ctx context.Context,
+	nodeName string) (*unstructured.Unstructured, error) {
+	nm := &maintenancev1alpha1.NodeMaintenance{}
+	err := m.K8sClient.Get(ctx, types.NamespacedName{
+		Name: nodeName, Namespace: m.opts.MaintenanceOPRequestorNS},
+		nm, &client.GetOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return nil, err
+	}
+	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert maintenancev1alpha1.NodeMaintenance to unstructured: %v", err)
+	}
+
+	return &unstructured.Unstructured{Object: objMap}, nil
 }
 
 // DeleteNodeMaintenance requests to delete nodeMaintenance obj
@@ -103,12 +120,6 @@ func (m *UpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context, nodeStat
 		return err
 	}
 	return nil
-}
-
-// TODO
-func getNodeMaintenanceName(nodeState *base.NodeUpgradeState) string {
-	// TODO: Need to consider naming convention
-	return fmt.Sprintf("node-maintenance-%s", strings.TrimPrefix(nodeState.Node.Name, "node"))
 }
 
 func validateNodeMaintenance(nodeState *base.NodeUpgradeState) (*maintenancev1alpha1.NodeMaintenance, error) {

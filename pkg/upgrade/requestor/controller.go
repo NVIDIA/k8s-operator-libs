@@ -113,25 +113,27 @@ func (r *NodeMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return reconcile.Result{}, nil
 }
 
-func (r *NodeMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager, log logr.Logger) error {
+func (r *NodeMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager, log logr.Logger, requestorID string) error {
 	log.V(consts.LogLevelInfo).Info("Started nodeMaintenance status manger")
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maintenancev1alpha1.NodeMaintenance{}, builder.WithPredicates(NewConditionChangedPredicate(log))).
+		For(&maintenancev1alpha1.NodeMaintenance{}, builder.WithPredicates(NewConditionChangedPredicate(log, requestorID))).
 		Named(MaintenanceOPControllerName).
 		Complete(r)
 }
 
 // NewConditionChangedPredicate creates a new ConditionChangedPredicate
-func NewConditionChangedPredicate(log logr.Logger) ConditionChangedPredicate {
+func NewConditionChangedPredicate(log logr.Logger, requestorID string) ConditionChangedPredicate {
 	return ConditionChangedPredicate{
-		Funcs: predicate.Funcs{},
-		log:   log,
+		Funcs:       predicate.Funcs{},
+		log:         log,
+		requestorID: requestorID,
 	}
 }
 
 type ConditionChangedPredicate struct {
 	predicate.Funcs
+	requestorID string
 
 	log logr.Logger
 }
@@ -139,6 +141,8 @@ type ConditionChangedPredicate struct {
 // Update implements Predicate.
 func (p ConditionChangedPredicate) Update(e event.TypedUpdateEvent[client.Object]) bool {
 	p.log.V(consts.LogLevelDebug).Info("ConditionChangedPredicate Update event")
+
+	// TODO: Add predicate for specific (known) Requestor ID
 
 	if e.ObjectOld == nil {
 		p.log.Error(nil, "old object is nil in update event, ignoring event.")
@@ -158,6 +162,11 @@ func (p ConditionChangedPredicate) Update(e event.TypedUpdateEvent[client.Object
 	newO, ok := e.ObjectNew.(*maintenancev1alpha1.NodeMaintenance)
 	if !ok {
 		p.log.Error(nil, "failed to cast new object to NodeMaintenance in update event, ignoring event.")
+		return false
+	}
+
+	// check for matching requestor ID
+	if newO.Spec.RequestorID != p.requestorID {
 		return false
 	}
 

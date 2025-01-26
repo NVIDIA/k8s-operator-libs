@@ -18,17 +18,18 @@ package requestor
 
 import "os"
 
+// TODO: This should be move to requestor's context (user)
 func InitEnvs() {
 	if os.Getenv("MAINTENANCE_OPERATOR_ENABLED") == "true" {
-		UseMaintenanceOperator = true
+		//UseMaintenanceOperator = true
 	}
 	if os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE") != "" {
-		MaintenanceOPRequestorNS = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE")
+		//MaintenanceOPRequestorNS = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE")
 	}
 	if os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID") != "" {
-		MaintenanceOPRequestorID = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID")
+		//MaintenanceOPRequestorID = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID")
 	}
 	if os.Getenv("MAINTENANCE_OPERATOR_POD_EVICTION_FILTERS") != "" {
-		*MaintenanceOPPodEvictionFilter = os.Getenv("MAINTENANCE_OPERATOR_POD_EVICTION_FILTERS")
+		//*MaintenanceOPPodEvictionFilter = os.Getenv("MAINTENANCE_OPERATOR_POD_EVICTION_FILTERS")
 	}
 }

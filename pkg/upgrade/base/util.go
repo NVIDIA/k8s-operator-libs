@@ -116,6 +116,12 @@ func GetUpgradeRequestedAnnotationKey() string {
 	return fmt.Sprintf(UpgradeRequestedAnnotationKeyFmt, DriverName)
 }
 
+// GetUpgradeRequestorModeAnnotationKey returns the key for annotation used to mark node as requestor upgrade mode
+// in progress
+func GetUpgradeRequestorModeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeRequestorModeAnnotationKeyFmt, DriverName)
+}
+
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
 func GetUpgradeInitialStateAnnotationKey() string {
 	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)

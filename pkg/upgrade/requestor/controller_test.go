@@ -64,12 +64,17 @@ var _ = Describe("NodeMaintenance Controller", func() {
 
 		// setup reconciler with manager
 		By("create and start requstor upgrade manager")
-		requestor.UseMaintenanceOperator = true
 		requestor.MaintenanceOPControllerName = fmt.Sprintf(requestor.MaintenanceOPControllerName+"-%s", id)
 		ctx, cancel = context.WithCancel(ctx)
 		common, err := base.NewCommonUpgradeStateManager(log, k8sConfig, requestor.Scheme, eventRecorder)
 		Expect(err).ToNot(HaveOccurred())
-		m, err := requestor.NewRequestorUpgradeManagerImpl(ctx, k8sConfig, common)
+		opts := requestor.UpgradeRequestorQptions{
+			UseMaintenanceOperator:       true,
+			MaintenanceOPRequestorCordon: true,
+			MaintenanceOPRequestorNS:     "default",
+			MaintenanceOPRequestorID:     "nvidia.operator.com",
+		}
+		m, err := requestor.NewRequestorUpgradeManagerImpl(ctx, k8sConfig, common, opts)
 		Expect(err).ToNot(HaveOccurred())
 		reqMngr = m.(*requestor.UpgradeManagerImpl)
 		time.Sleep(1 * time.Second)

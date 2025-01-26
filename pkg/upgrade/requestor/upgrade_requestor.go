@@ -24,43 +24,54 @@ import (
 
 	//nolint:depguard
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
-	"k8s.io/client-go/rest"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+)
+
+const (
+	MaintenanceOPFinalizerName = "maintenance.nvidia.com/finalizer"
 )
 
 var (
-	// UseMaintenanceOperator enables requestor updrade mode
-	UseMaintenanceOperator            bool
-	MaintenanceOPRequestorID          = "nvidia.operator.com"
-	MaintenanceOPFinalizerName        = "maintenance.nvidia.com/finalizer"
-	MaintenanceOPRequestorNS          string
-	MaintenanceOPPodEvictionFilter    *string
-	MaintenanceOPControllerName       = "node-maintenance"
-	MaintenanceOPRequestorCordon      = true // TODO: do we need to set this dynamically
+	MaintenanceOPControllerName       = "node-maintenance-requestor"
 	ErrNodeMaintenanceUpgradeDisabled = errors.New("node maintenance upgrade mode is disabled")
 )
+
+type UpgradeRequestorQptions struct {
+	// UseMaintenanceOperator enables requestor updrade mode
+	UseMaintenanceOperator bool
+	// TODO: Do we need this flag?
+	MaintenanceOPRequestorCordon   bool
+	MaintenanceOPRequestorID       string
+	MaintenanceOPRequestorNS       string
+	MaintenanceOPPodEvictionFilter *string
+}
 
 // UpgradeManagerImpl contains concrete implementations for distinct requestor
 // (e.g. maintenance OP) upgrade mode
 type UpgradeManagerImpl struct {
 	*base.CommonUpgradeManagerImpl
-	Ctrl       manager.Manager
-	Reconciler *NodeMaintenanceReconciler
-	Wg         *sync.WaitGroup
+	controllerManager manager.Manager
+	opts              UpgradeRequestorQptions
+	Reconciler        *NodeMaintenanceReconciler
+	Wg                *sync.WaitGroup
 }
 
 // NewClusterUpgradeStateManager creates a new instance of UpgradeManagerImpl
 func NewRequestorUpgradeManagerImpl(
 	ctx context.Context,
 	k8sConfig *rest.Config,
-	common *base.CommonUpgradeManagerImpl) (base.ProcessNodeStateManager, error) {
-	if !UseMaintenanceOperator {
+	common *base.CommonUpgradeManagerImpl,
+	opts UpgradeRequestorQptions) (base.ProcessNodeStateManager, error) {
+	if !opts.UseMaintenanceOperator {
 		common.Log.V(consts.LogLevelInfo).Info("node maintenance upgrade mode is disabled")
 		return nil, ErrNodeMaintenanceUpgradeDisabled
 	}
@@ -78,13 +89,14 @@ func NewRequestorUpgradeManagerImpl(
 		Scheme:   ctr.GetScheme(),
 		StatusCh: make(chan NodeMaintenanceCondition, 1),
 	}
-	if err := reconciler.SetupWithManager(ctr, common.Log); err != nil {
+	if err := reconciler.SetupWithManager(ctr, common.Log, opts.MaintenanceOPRequestorID); err != nil {
 		common.Log.V(consts.LogLevelError).Error(err, "unable to create controller", "controller", "NodeMaintenance")
 		return nil, err
 	}
 	manager := &UpgradeManagerImpl{
+		opts:                     opts,
 		CommonUpgradeManagerImpl: common,
-		Ctrl:                     ctr,
+		controllerManager:        ctr,
 		Reconciler:               reconciler,
 		Wg:                       &sync.WaitGroup{},
 	}
@@ -98,7 +110,7 @@ func (m *UpgradeManagerImpl) Start(ctx context.Context) {
 	m.Wg.Add(1)
 	go func() {
 		defer m.Wg.Done()
-		err := m.Ctrl.Start(ctx)
+		err := m.controllerManager.Start(ctx)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "failed controller manager")
 		}
@@ -119,15 +131,22 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeRequiredNodes")
 
-	SetDefaultNodeMaintenance(MaintenanceOPRequestorCordon, upgradePolicy)
+	SetDefaultNodeMaintenance(m.opts.MaintenanceOPRequestorNS, m.opts.MaintenanceOPRequestorID,
+		m.opts.MaintenanceOPRequestorCordon, upgradePolicy)
 	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
 		err := m.CreateNodeMaintenance(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "failed to create nodeMaintenance")
 			return err
 		}
+
+		err = m.SetUpgradeRequestorModeAnnotation(ctx, nodeState.Node.Name)
+		if err != nil {
+			return fmt.Errorf("failed annotate node for 'upgrade-requestor-mode'. %v", err)
+		}
 		// update node state to 'node-maintenance-required'
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateNodeMaintenanceRequired)
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
+			base.UpgradeStateNodeMaintenanceRequired)
 		if err != nil {
 			return fmt.Errorf("failed to update node state. %v", err)
 		}
@@ -150,6 +169,27 @@ func (m *UpgradeManagerImpl) ProcessUncordonRequiredNodes(
 			return err
 		}
 	}
+	return nil
+}
+
+// SetUpgradeRequestorModeAnnotation will set upgrade-requestor-mode for specifying node upgrade mode flow
+func (m *UpgradeManagerImpl) SetUpgradeRequestorModeAnnotation(ctx context.Context, nodeName string) error {
+	node := &corev1.Node{}
+	nodeKey := client.ObjectKey{
+		Name: nodeName,
+	}
+	if err := m.K8sClient.Get(context.Background(), nodeKey, node); err != nil {
+		return err
+	}
+	patchString := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q: "true"}}}`,
+		base.GetUpgradeRequestorModeAnnotationKey()))
+	patch := client.RawPatch(types.MergePatchType, patchString)
+	err := m.K8sClient.Patch(ctx, node, patch)
+	if err != nil {
+		return err
+	}
+	m.Log.V(consts.LogLevelDebug).Info("Node annotated with upgrade-requestor-mode", "name", nodeName)
+
 	return nil
 }
 

@@ -71,7 +71,7 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths: []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "..", "hack", "crd", "bases")},
 	}
 
 	var err error
@@ -96,9 +96,6 @@ var _ = BeforeSuite(func() {
 	base.SetDriverName("gpu")
 
 	log = ctrl.Log.WithName("requestorSuitTest")
-	// init operator vars
-	requestor.MaintenanceOPRequestorNS = "default"
-
 })
 
 var _ = AfterSuite(func() {
@@ -202,7 +199,7 @@ func NewNodeMaintenance(name, nodeName string) NodeMaintenance {
 			Finalizers: []string{requestor.MaintenanceOPFinalizerName},
 		},
 		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
-			RequestorID: requestor.MaintenanceOPRequestorID,
+			RequestorID: "nvidia.operator.com",
 			NodeName:    nodeName,
 		},
 		Status: status,

@@ -211,22 +211,6 @@ func (m *CommonUpgradeManagerImpl) GetCurrentUnavailableNodes(ctx context.Contex
 	return unavailableNodes
 }
 
-// BuildNodeUpgradeState creates a mapping between a node,
-// the driver POD running on them and the daemon set, controlling this pod
-func (m *CommonUpgradeManagerImpl) BuildNodeUpgradeState(
-	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
-	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
-	}
-
-	upgradeStateLabel := GetUpgradeStateLabelKey()
-	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
-		"node", node.Name, "state", node.Labels[upgradeStateLabel])
-
-	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds}, nil
-}
-
 // GetDriverDaemonSets retrieves DaemonSets with given labels and returns UID->DaemonSet map
 func (m *CommonUpgradeManagerImpl) GetDriverDaemonSets(ctx context.Context, namespace string,
 	labels map[string]string) (map[types.UID]*appsv1.DaemonSet, error) {

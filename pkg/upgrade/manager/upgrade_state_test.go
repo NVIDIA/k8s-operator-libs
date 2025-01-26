@@ -55,18 +55,18 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		var err error
 		ctx = context.TODO()
 		id = randSeq(5)
+		opts := upgrade.UpgradeStateOptions{}
 		// Create new ClusterUpgradeStateManagerImpl using mocked managers initialized in BeforeSuite()
-		if !requestor.UseMaintenanceOperator {
-			stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(ctx, log, k8sConfig, eventRecorder)
-			Expect(err).NotTo(HaveOccurred())
+		stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(ctx, log, k8sConfig,
+			eventRecorder, opts)
+		Expect(err).NotTo(HaveOccurred())
 
-			stateManager, _ = stateManagerInterface.(*upgrade.ClusterUpgradeStateManagerImpl)
-			stateManager.NodeUpgradeStateProvider = &nodeUpgradeStateProvider
-			stateManager.DrainManager = &drainManager
-			stateManager.CordonManager = &cordonManager
-			stateManager.PodManager = &podManager
-			stateManager.ValidationManager = &validationManager
-		}
+		stateManager, _ = stateManagerInterface.(*upgrade.ClusterUpgradeStateManagerImpl)
+		stateManager.NodeUpgradeStateProvider = &nodeUpgradeStateProvider
+		stateManager.DrainManager = &drainManager
+		stateManager.CordonManager = &cordonManager
+		stateManager.PodManager = &podManager
+		stateManager.ValidationManager = &validationManager
 	})
 
 	Describe("BuildState", func() {
@@ -1276,6 +1276,23 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}
 		Expect(stateManagerInterface.ApplyState(ctx, &clusterState, policy)).To(Succeed())
 
+		By("verify node requestor-mode-annotation")
+		Eventually(func() bool {
+			for _, nodeState := range clusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
+				node := corev1.Node{}
+				nodeKey := client.ObjectKey{
+					Name: nodeState.Node.Name,
+				}
+				if err := k8sClient.Get(ctx, nodeKey, &node); err != nil {
+					if _, ok := node.Annotations[base.GetUpgradeRequestorModeAnnotationKey()]; !ok {
+						return false
+					}
+				}
+				Expect(node.Annotations[base.GetUpgradeRequestorModeAnnotationKey()]).To(Equal("true"))
+			}
+			return true
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
 		By("verify generated node-maintenance obj(s)")
 		nms := &maintenancev1alpha1.NodeMaintenanceList{}
 		Eventually(func() bool {
@@ -1411,7 +1428,13 @@ func withUpgradeRequestorMode(ctx context.Context, id string) context.CancelFunc
 	// unique ID per instance name
 	requestor.MaintenanceOPControllerName = fmt.Sprintf(requestor.MaintenanceOPControllerName+"-%s", id)
 	ctx, cancelFn := context.WithCancel(ctx)
-	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(ctx, log, k8sConfig, eventRecorder)
+	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(ctx, log, k8sConfig,
+		eventRecorder, upgrade.UpgradeStateOptions{
+			Requestor: requestor.UpgradeRequestorQptions{
+				UseMaintenanceOperator:   true,
+				MaintenanceOPRequestorNS: "default",
+				MaintenanceOPRequestorID: "network-opeator.com",
+			}})
 	Expect(err).NotTo(HaveOccurred())
 
 	stateManager, _ = stateManagerInterface.(*upgrade.ClusterUpgradeStateManagerImpl)

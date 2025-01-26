@@ -20,18 +20,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/inplace"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
+	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ExtendedUpgradeStateManager interface purpose is to decouple ApplyState implementation from base package
@@ -61,6 +61,7 @@ type ClusterUpgradeStateManagerImpl struct {
 	*base.CommonUpgradeManagerImpl
 	inplace   base.ProcessNodeStateManager
 	requestor base.ProcessNodeStateManager
+	opts      UpgradeStateOptions
 }
 
 // NewClusterUpgradeStateManager creates a new instance of ClusterUpgradeStateManagerImpl
@@ -68,14 +69,15 @@ func NewClusterUpgradeStateManager(
 	ctx context.Context,
 	log logr.Logger,
 	k8sConfig *rest.Config,
-	eventRecorder record.EventRecorder) (ClusterUpgradeStateManager, error) {
+	eventRecorder record.EventRecorder,
+	opts UpgradeStateOptions) (ClusterUpgradeStateManager, error) {
 	requestor.InitEnvs()
 
 	common, err := base.NewCommonUpgradeStateManager(log, k8sConfig, requestor.Scheme, eventRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create common upgrade state manager. %v", err)
 	}
-	request, err := requestor.NewRequestorUpgradeManagerImpl(ctx, k8sConfig, common)
+	request, err := requestor.NewRequestorUpgradeManagerImpl(ctx, k8sConfig, common, opts.Requestor)
 	if err != nil && err != requestor.ErrNodeMaintenanceUpgradeDisabled {
 		return nil, fmt.Errorf("failed to create requestor upgrade state manager. %v", err)
 	}
@@ -89,9 +91,22 @@ func NewClusterUpgradeStateManager(
 		CommonUpgradeManagerImpl: common,
 		requestor:                request,
 		inplace:                  inplace,
+		opts:                     opts,
 	}
 
 	return manager, nil
+}
+
+type UpgradeStateOptions struct {
+	Requestor requestor.UpgradeRequestorQptions
+}
+
+// TODO: Set this on state manager
+func NewUpgradeStateOptions() UpgradeStateOptions {
+	return UpgradeStateOptions{
+		//TODO update according to env variable
+		requestor.UpgradeRequestorQptions{UseMaintenanceOperator: true},
+	}
 }
 
 // BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
@@ -161,6 +176,34 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	}
 
 	return &upgradeState, nil
+}
+
+// BuildNodeUpgradeState creates a mapping between a node,
+// the driver POD running on them and the daemon set, controlling this pod
+func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
+	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*base.NodeUpgradeState, error) {
+	var nm *unstructured.Unstructured
+	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
+	}
+
+	if m.opts.Requestor.UseMaintenanceOperator {
+		rum, ok := m.requestor.(*requestor.UpgradeManagerImpl)
+		if !ok {
+			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
+		}
+		nm, err = rum.GetNodeMaintenance(ctx, node.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed while trying to fetch nodeMaintennace obj: %v", err)
+		}
+	}
+
+	upgradeStateLabel := GetUpgradeStateLabelKey()
+	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
+		"node", node.Name, "state", node.Labels[upgradeStateLabel])
+
+	return &base.NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -246,7 +289,7 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return err
 	}
 
-	if requestor.UseMaintenanceOperator {
+	if m.opts.Requestor.UseMaintenanceOperator {
 		err = m.ProcessPostMaintenanceNodes(currentState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to schedule pods restart")
@@ -287,7 +330,7 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx 
 	currentState *base.ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	var err error
 	// Start upgrade process for upgradesAvailable number of nodes
-	if requestor.UseMaintenanceOperator {
+	if m.opts.Requestor.UseMaintenanceOperator {
 		err = m.requestor.ProcessUpgradeRequiredNodes(ctx, currentState, upgradePolicy)
 	} else {
 		err = m.inplace.ProcessUpgradeRequiredNodes(ctx, currentState, upgradePolicy)
@@ -298,7 +341,7 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx 
 func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodesWrapper(ctx context.Context,
 	currentState *base.ClusterUpgradeState) error {
 	var err error
-	if requestor.UseMaintenanceOperator {
+	if m.opts.Requestor.UseMaintenanceOperator {
 		err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState)
 	} else {
 		err = m.inplace.ProcessUncordonRequiredNodes(ctx, currentState)

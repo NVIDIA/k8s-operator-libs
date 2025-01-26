@@ -39,6 +39,8 @@ const (
 	// (used for orphaned pods)
 	// Setting this label will trigger setting upgrade state to upgrade-required
 	UpgradeRequestedAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requested"
+	// UpgradeRequestorModeAnnotationKeyFmt
+	UpgradeRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade
@@ -73,8 +75,6 @@ const (
 	UpgradeStateDone = "upgrade-done"
 	// UpgradeStateFailed is set when there are any failures during the driver upgrade
 	UpgradeStateFailed = "upgrade-failed"
-	// TODO: UpgradeValidationRequestorModeAnnotationKeyFmt
-	UpgradeValidationRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
 )
 
 const (
