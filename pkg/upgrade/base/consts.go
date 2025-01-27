@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade
+package base
 
 const (
 	// UpgradeStateLabelKeyFmt is the format of the node label key indicating driver upgrade states
@@ -39,6 +39,8 @@ const (
 	// (used for orphaned pods)
 	// Setting this label will trigger setting upgrade state to upgrade-required
 	UpgradeRequestedAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requested"
+	// UpgradeRequestorModeAnnotationKeyFmt
+	UpgradeRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade
@@ -53,6 +55,14 @@ const (
 	// UpgradeStateDrainRequired is set when the node is required to be scheduled for drain. After the drain the state
 	// is changed either to UpgradeStatePodRestartRequired or UpgradeStateFailed
 	UpgradeStateDrainRequired = "drain-required"
+	// UpgradeStateNodeMaintenanceRequired is set when UseMaintenanceOperator is true and maintenance operator exists.
+	// following state designates node operation states (e.g cordon, drain), since they will be handled externally
+	// by maintenance operator
+	UpgradeStateNodeMaintenanceRequired = "node-maintenance-required"
+	// UpgradeStatePostMaintenanceRequired is set when UseMaintenanceOperator is true and maintenance operator exists.
+	// in this case node maintenance operations will be performed externally by maintenance operator.
+	// this state designates requestor to perform post maintenance operations (e.g restart driver's pod etc')
+	UpgradeStatePostMaintenanceRequired = "post-maintenance-required"
 	// UpgradeStatePodRestartRequired is set when the driver pod on the node is scheduled for restart
 	// or when unblock of the driver loading is required (safe driver load)
 	UpgradeStatePodRestartRequired = "pod-restart-required"
