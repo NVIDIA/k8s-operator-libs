@@ -11,7 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade
+package base
 
 import (
 	"fmt"
@@ -114,6 +114,12 @@ func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
 // externally (orphaned pod)
 func GetUpgradeRequestedAnnotationKey() string {
 	return fmt.Sprintf(UpgradeRequestedAnnotationKeyFmt, DriverName)
+}
+
+// GetUpgradeRequestorModeAnnotationKey returns the key for annotation used to mark node as requestor upgrade mode
+// in progress
+func GetUpgradeRequestorModeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeRequestorModeAnnotationKeyFmt, DriverName)
 }
 
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
