@@ -99,3 +99,15 @@ kubectl delete pod -n `kubectl get -A pods --field-selector spec.nodeName=<node_
 #### Updated driver pod failed to start / New version of driver can't install on the node
 * Manually delete the pod using by using `kubectl delete -n <operator-namespace> <pod_name>`
 * If after the restart the pod still fails, change the driver version in the CustomResource to the previous or other working version
+
+### New Requestor upgrade mode
+New `requestor` mode upgrade is utilizing [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance API objects, to initiate DOCA driver upgrade process.
+Essentially it will retire current upgrade controller (inplace mode) from performing the following node operations: cordon, drain, wait for pods completion, uncordon.
+
+To enable requestor mode the following environment variable should be enabled `MAINTENANCE_OPERATOR_ENABLED=true`
+Initially, both inplace/requestor modes will be working simultenously.
+
+#### Additional added node upgrade states
+* `node-maintenance-required` is set for requestor mode upgrade (e.g.`MAINTENANCE_OPERATOR_ENABLED=true`) post `upgrade-required` state. Essentially it will create a matching nodeMaintenance object for maintenance operator to perform its node operations.
+* `post-maintenance-required` is set when node maintenance status condition is `ready`, meaning maintenance operator has completed 
+cordoning and draining related node(s), and now requestor (client) needs to perform post operations (e.g restart driver's pod, restart node, etc.)

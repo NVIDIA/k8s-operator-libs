@@ -14,15 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package drainercordoner_test
 
 import (
 	"context"
 
+	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 )
 
 var _ = Describe("CordonManager tests", func() {
@@ -30,7 +29,7 @@ var _ = Describe("CordonManager tests", func() {
 		ctx := context.TODO()
 		node := createNode("test-node")
 
-		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
+		cordonManager := drainercordoner.NewCordonManager(k8sInterface, log)
 		err := cordonManager.Cordon(ctx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())

@@ -11,7 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade
+package base
 
 import (
 	"context"
@@ -96,7 +96,7 @@ func (m *ValidationManagerImpl) Validate(ctx context.Context, node *corev1.Node)
 		if !m.isPodReady(pod) {
 			err = m.handleTimeout(ctx, node, int64(validationTimeoutSeconds))
 			if err != nil {
-				logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
+				LogEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
 					"Failed to handle timeout for validation state", err.Error())
 				return false, fmt.Errorf("unable to handle timeout for validation state: %v", err)
 			}

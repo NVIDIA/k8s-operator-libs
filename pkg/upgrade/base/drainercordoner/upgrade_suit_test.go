@@ -1,5 +1,5 @@
 /*
-Copyright 2022 NVIDIA CORPORATION & AFFILIATES
+Copyright 2025 NVIDIA CORPORATION & AFFILIATES
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,11 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package drainercordoner_test
 
 import (
 	"context"
-	"math/rand"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -31,9 +30,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubectl/pkg/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -78,7 +77,6 @@ var _ = BeforeSuite(func() {
 	k8sConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
-	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
@@ -370,20 +368,6 @@ func (p Pod) Create() *corev1.Pod {
 	return pod
 }
 
-func createNamespace(name string) *corev1.Namespace {
-	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	err := k8sClient.Create(context.TODO(), namespace)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, namespace)
-	return namespace
-}
-
-func updatePodStatus(pod *corev1.Pod) error {
-	err := k8sClient.Status().Update(context.TODO(), pod)
-	Expect(err).NotTo(HaveOccurred())
-	return err
-}
-
 func createNode(name string) *corev1.Node {
 	node := &corev1.Node{}
 	node.Name = name
@@ -399,22 +383,4 @@ func getNode(name string) *corev1.Node {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(node).NotTo(BeNil())
 	return node
-}
-
-func getNodeUpgradeState(node *corev1.Node) string {
-	return node.Labels[base.GetUpgradeStateLabelKey()]
-}
-
-func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[base.GetUpgradeInitialStateAnnotationKey()]
-	return ok
-}
-
-func randSeq(n int) string {
-	letters := []rune("abcdefghijklmnopqrstuvwxyz")
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
 }
