@@ -19,9 +19,10 @@ package drainercordoner_test
 import (
 	"context"
 
-	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 )
 
 var _ = Describe("CordonManager tests", func() {

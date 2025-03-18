@@ -21,6 +21,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 )
@@ -31,6 +32,7 @@ type NodeUpgradeState struct {
 	Node            *corev1.Node
 	DriverPod       *corev1.Pod
 	DriverDaemonSet *appsv1.DaemonSet
+	NodeMaintenance *unstructured.Unstructured
 }
 
 // IsOrphanedPod returns true if Pod is not associated to a DaemonSet
@@ -58,6 +60,8 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 type ProcessNodeStateManager interface {
 	ProcessUpgradeRequiredNodes(ctx context.Context,
 		currentClusterState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error
+	ProcessPostMaintenanceNodes(ctx context.Context,
+		currentClusterState *ClusterUpgradeState) error
 	ProcessUncordonRequiredNodes(
 		ctx context.Context, currentClusterState *ClusterUpgradeState) error
 }

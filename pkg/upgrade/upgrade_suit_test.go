@@ -19,8 +19,10 @@ package upgrade_test
 import (
 	"context"
 	"math/rand"
+	"path/filepath"
 	"testing"
 
+	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,11 +31,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubectl/pkg/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -42,6 +46,7 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -72,17 +77,21 @@ var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	By("bootstrapping test environment")
-	testEnv = &envtest.Environment{}
+	testEnv = &envtest.Environment{
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "hack", "crd", "bases")},
+	}
 
 	var err error
 	k8sConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
+
+	err = maintenancev1alpha1.AddToScheme(requestor.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: requestor.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
@@ -242,6 +251,48 @@ func (n Node) Create() *corev1.Node {
 	Expect(err).NotTo(HaveOccurred())
 	createdObjects = append(createdObjects, node)
 	return node
+}
+
+type NodeMaintenance struct {
+	*maintenancev1alpha1.NodeMaintenance
+}
+
+func NewNodeMaintenance(name, namespace string) NodeMaintenance {
+	nm := &maintenancev1alpha1.NodeMaintenance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
+			NodeName:    name,
+			RequestorID: "dummy-requestor.com",
+		},
+	}
+
+	return NodeMaintenance{nm}
+}
+
+func (m NodeMaintenance) WithConditions(condition v1.Condition) NodeMaintenance {
+	conditions := []v1.Condition{}
+	conditions = append(conditions, condition)
+	status := maintenancev1alpha1.NodeMaintenanceStatus{
+		Conditions: conditions,
+	}
+	m.Status = status
+	err := k8sClient.Status().Update(context.TODO(), m)
+	Expect(err).NotTo(HaveOccurred())
+
+	return m
+}
+
+func (m NodeMaintenance) Create() *unstructured.Unstructured {
+	nm := m.NodeMaintenance
+	err := k8sClient.Create(context.TODO(), nm)
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, nm)
+
+	objMap, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
+	return &unstructured.Unstructured{Object: objMap}
 }
 
 type DaemonSet struct {

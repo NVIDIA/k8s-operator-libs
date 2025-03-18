@@ -101,11 +101,14 @@ kubectl delete pod -n `kubectl get -A pods --field-selector spec.nodeName=<node_
 * If after the restart the pod still fails, change the driver version in the CustomResource to the previous or other working version
 
 ### New Requestor upgrade mode
-New `requestor` mode upgrade is utilizing [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance API objects, to initiate DOCA driver upgrade process.
-Essentially it will retire current upgrade controller (inplace mode) from performing the following node operations: cordon, drain, wait for pods completion, uncordon.
+New `requestor` upgrade mode is utilizing [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance API objects, to initiate DOCA driver upgrade process.
+Essentially it will retire current upgrade controller (inplace mode) from performing the following node operations: cordon, wait for pods completion, drain, uncordon.
+To enable requestor mode the following environment variable should be enabled `MAINTENANCE_OPERATOR_ENABLED=true`.
+* Make sure that NVIDIA maintenance-operator pod is running.
 
-To enable requestor mode the following environment variable should be enabled `MAINTENANCE_OPERATOR_ENABLED=true`
-Initially, both inplace/requestor modes will be working simultenously.
+> __Note__: Initially `k8s-operator-libs` will support both `requestor`, `inplace` (legacy) modes simultaneously.
+> Meaning in case node undergoes upgrade prior to enabling `requestor` mode, node will continue `inplace` upgrade mode. Only after `requestor` mode is set, and upgrade
+> controller has set nodes state to be upgrade-required, only then new requestor mode will take place.
 
 #### Additional added node upgrade states
 * `node-maintenance-required` is set for requestor mode upgrade (e.g.`MAINTENANCE_OPERATOR_ENABLED=true`) post `upgrade-required` state. Essentially it will create a matching nodeMaintenance object for maintenance operator to perform its node operations.

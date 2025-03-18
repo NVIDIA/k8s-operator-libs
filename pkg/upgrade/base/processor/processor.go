@@ -7,10 +7,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
-	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,6 +14,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 )
 
 // CommonUpgradeStateManager interface is a unified cluster upgrade abstraction for both upgrade modes
@@ -246,7 +247,7 @@ func (m *CommonUpgradeManagerImpl) ProcessDoneOrUnknownNodes(
 			// annotation and leave node in Unschedulable state when upgrade completes.
 			if IsNodeUnschedulable(nodeState.Node) {
 				annotationKey := base.GetUpgradeInitialStateAnnotationKey()
-				annotationValue := "true" //trueString
+				annotationValue := base.TrueString
 				m.Log.V(consts.LogLevelInfo).Info(
 					"Node is unschedulable, adding annotation to track initial state of the node",
 					"node", nodeState.Node.Name, "annotation", annotationKey)
@@ -680,7 +681,7 @@ func (m *CommonUpgradeManagerImpl) isNodeConditionReady(node *corev1.Node) bool 
 
 // skipNodeUpgrade returns true if node is labeled to skip driver upgrades
 func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
-	return node.Labels[base.GetUpgradeSkipNodeLabelKey()] == "true" //trueString
+	return node.Labels[base.GetUpgradeSkipNodeLabelKey()] == base.TrueString
 }
 
 // updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
