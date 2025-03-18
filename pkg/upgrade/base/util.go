@@ -144,6 +144,7 @@ func GetEventReason() string {
 	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
 }
 
+// LogEventf logs a formatted event for a given kubernetes object
 func LogEventf(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string,
 	args ...interface{}) {
 	if recorder != nil {
@@ -151,6 +152,7 @@ func LogEventf(recorder record.EventRecorder, object runtime.Object, eventType s
 	}
 }
 
+// LogEvent logs an event for a given kubernetes object
 func LogEvent(recorder record.EventRecorder, object runtime.Object, eventType string, reason string,
 	messageFmt string) {
 	if recorder != nil {
