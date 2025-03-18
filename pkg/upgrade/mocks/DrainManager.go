@@ -16,7 +16,9 @@ package mocks
 
 import (
 	context "context"
+
 	mock "github.com/stretchr/testify/mock"
+
 	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 )
 

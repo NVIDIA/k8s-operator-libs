@@ -83,6 +83,6 @@ const (
 	nodeNameFieldSelectorFmt = "spec.nodeName=%s"
 	// nullString is the word null as string to avoid duplication and linting errors
 	nullString = "null"
-	// trueString is the word true as string to avoid duplication and linting errors
-	trueString = "true"
+	// TrueString is the word true as string to avoid duplication and linting errors
+	TrueString = "true"
 )
