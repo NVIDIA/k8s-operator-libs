@@ -17,8 +17,6 @@ limitations under the License.
 package drainercordoner_test
 
 import (
-	"context"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -27,15 +25,14 @@ import (
 
 var _ = Describe("CordonManager tests", func() {
 	It("CordonManager should mark a node as schedulable/unschedulable", func() {
-		ctx := context.TODO()
 		node := createNode("test-node")
 
 		cordonManager := drainercordoner.NewCordonManager(k8sInterface, log)
-		err := cordonManager.Cordon(ctx, node)
+		err := cordonManager.Cordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())
 
-		err = cordonManager.Uncordon(ctx, node)
+		err = cordonManager.Uncordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeFalse())
 	})

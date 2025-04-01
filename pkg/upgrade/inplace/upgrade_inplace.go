@@ -47,9 +47,9 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	var err error
 
-	totalNodes := m.GetTotalManagedNodes(ctx, currentClusterState)
-	upgradesInProgress := m.GetUpgradesInProgress(ctx, currentClusterState)
-	currentUnavailableNodes := m.GetCurrentUnavailableNodes(ctx, currentClusterState)
+	totalNodes := m.GetTotalManagedNodes(currentClusterState)
+	upgradesInProgress := m.GetUpgradesInProgress(currentClusterState)
+	currentUnavailableNodes := m.GetCurrentUnavailableNodes(currentClusterState)
 	maxUnavailable := totalNodes
 
 	if upgradePolicy.MaxUnavailable != nil {
@@ -59,7 +59,7 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 			return err
 		}
 	}
-	upgradesAvailable := m.GetUpgradesAvailable(ctx, currentClusterState, upgradePolicy.MaxParallelUpgrades,
+	upgradesAvailable := m.GetUpgradesAvailable(currentClusterState, upgradePolicy.MaxParallelUpgrades,
 		maxUnavailable)
 	m.Log.V(consts.LogLevelInfo).Info("Upgrades in progress",
 		"currently in progress", upgradesInProgress,
@@ -112,8 +112,35 @@ func (m *UpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	return nil
 }
 
-func (m *UpgradeManagerImpl) ProcessPostMaintenanceNodes(ctx context.Context,
+func (m *UpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
 	currentClusterState *base.ClusterUpgradeState) error {
-	// in future versions we'll remove 'pod-restart-required' and use 'post-maintenance-required' instead...
+	// TODO: in future versions we'll remove 'pod-restart-required' and use 'post-maintenance-required' instead
 	return m.ProcessPodRestartNodes(ctx, currentClusterState)
+}
+
+// ProcessUncordonRequiredNodes processes UpgradeStateUncordonRequired nodes,
+// uncordons them and moves them to UpgradeStateDone state
+func (m *UpgradeManagerImpl) ProcessUncordonRequiredNodes(
+	ctx context.Context, currentClusterState *base.ClusterUpgradeState) error {
+	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
+
+	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUncordonRequired] {
+		// skip in case node had undergone uncordon by maintenance operator
+		if nodeState.NodeMaintenance != nil {
+			continue
+		}
+		err := m.CordonManager.Uncordon(ctx, nodeState.Node)
+		if err != nil {
+			m.Log.V(consts.LogLevelWarning).Error(
+				err, "Node uncordon failed", "node", nodeState.Node)
+			return err
+		}
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateDone)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to change node upgrade state", "state", base.UpgradeStateDone)
+			return err
+		}
+	}
+	return nil
 }

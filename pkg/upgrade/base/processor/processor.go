@@ -24,18 +24,18 @@ import (
 // CommonUpgradeStateManager interface is a unified cluster upgrade abstraction for both upgrade modes
 type CommonUpgradeStateManager interface {
 	// GetTotalManagedNodes returns the total count of nodes managed for driver upgrades
-	GetTotalManagedNodes(ctx context.Context, currentState *base.ClusterUpgradeState) int
+	GetTotalManagedNodes(currentState *base.ClusterUpgradeState) int
 	// GetUpgradesInProgress returns count of nodes on which upgrade is in progress
-	GetUpgradesInProgress(ctx context.Context, currentState *base.ClusterUpgradeState) int
+	GetUpgradesInProgress(currentState *base.ClusterUpgradeState) int
 	// GetUpgradesDone returns count of nodes on which upgrade is complete
-	GetUpgradesDone(ctx context.Context, currentState *base.ClusterUpgradeState) int
+	GetUpgradesDone(currentState *base.ClusterUpgradeState) int
 	// GetUpgradesAvailable returns count of nodes on which upgrade can be done
-	GetUpgradesAvailable(ctx context.Context,
-		currentState *base.ClusterUpgradeState, maxParallelUpgrades int, maxUnavailable int) int
+	GetUpgradesAvailable(currentState *base.ClusterUpgradeState, maxParallelUpgrades int,
+		maxUnavailable int) int
 	// GetUpgradesFailed returns count of nodes on which upgrades have failed
-	GetUpgradesFailed(ctx context.Context, currentState *base.ClusterUpgradeState) int
+	GetUpgradesFailed(currentState *base.ClusterUpgradeState) int
 	// GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
-	GetUpgradesPending(ctx context.Context, currentState *base.ClusterUpgradeState) int
+	GetUpgradesPending(currentState *base.ClusterUpgradeState) int
 	// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion'
 	// state and pass a custom PodDeletionFilter to use
 	WithPodDeletionEnabled(filter base.PodDeletionFilter) CommonUpgradeStateManager
@@ -135,10 +135,7 @@ func (m *CommonUpgradeManagerImpl) IsValidationEnabled() bool {
 }
 
 // GetCurrentUnavailableNodes returns all nodes that are not in ready state
-// TODO: Drop ctx as it's not used
-//
-//nolint:revive
-func (m *CommonUpgradeManagerImpl) GetCurrentUnavailableNodes(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetCurrentUnavailableNodes(
 	currentState *base.ClusterUpgradeState) int {
 	unavailableNodes := 0
 	for _, nodeUpgradeStateList := range currentState.NodeStates {
@@ -296,7 +293,7 @@ func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context,
 	if nodeState.IsOrphanedPod() {
 		return false, true, nil
 	}
-	podRevisionHash, err := m.PodManager.GetPodControllerRevisionHash(ctx, nodeState.DriverPod)
+	podRevisionHash, err := m.PodManager.GetPodControllerRevisionHash(nodeState.DriverPod)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
 			err, "Failed to get pod template revision hash", "pod", nodeState.DriverPod)
@@ -597,29 +594,6 @@ func (m *CommonUpgradeManagerImpl) ProcessValidationRequiredNodes(
 	return nil
 }
 
-// ProcessUncordonRequiredNodes processes UpgradeStateUncordonRequired nodes,
-// uncordons them and moves them to UpgradeStateDone state
-func (m *CommonUpgradeManagerImpl) ProcessUncordonRequiredNodes(
-	ctx context.Context, currentClusterState *base.ClusterUpgradeState) error {
-	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
-
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUncordonRequired] {
-		err := m.CordonManager.Uncordon(ctx, nodeState.Node)
-		if err != nil {
-			m.Log.V(consts.LogLevelWarning).Error(
-				err, "Node uncordon failed", "node", nodeState.Node)
-			return err
-		}
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateDone)
-		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", base.UpgradeStateDone)
-			return err
-		}
-	}
-	return nil
-}
-
 func (m *CommonUpgradeManagerImpl) isDriverPodInSync(ctx context.Context,
 	nodeState *base.NodeUpgradeState) (bool, error) {
 	isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
@@ -719,10 +693,7 @@ func IsNodeUnschedulable(node *corev1.Node) bool {
 }
 
 // GetTotalManagedNodes returns the total count of nodes managed for driver upgrades
-// TODO: Drop ctx as it's not used
-//
-//nolint:revive
-func (m *CommonUpgradeManagerImpl) GetTotalManagedNodes(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetTotalManagedNodes(
 	currentState *base.ClusterUpgradeState) int {
 	totalNodes := len(currentState.NodeStates[base.UpgradeStateUnknown]) +
 		len(currentState.NodeStates[base.UpgradeStateDone]) +
@@ -740,28 +711,25 @@ func (m *CommonUpgradeManagerImpl) GetTotalManagedNodes(ctx context.Context,
 }
 
 // GetUpgradesInProgress returns count of nodes on which upgrade is in progress
-func (m *CommonUpgradeManagerImpl) GetUpgradesInProgress(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetUpgradesInProgress(
 	currentState *base.ClusterUpgradeState) int {
-	totalNodes := m.GetTotalManagedNodes(ctx, currentState)
+	totalNodes := m.GetTotalManagedNodes(currentState)
 	return totalNodes - (len(currentState.NodeStates[base.UpgradeStateUnknown]) +
 		len(currentState.NodeStates[base.UpgradeStateDone]) +
 		len(currentState.NodeStates[base.UpgradeStateUpgradeRequired]))
 }
 
 // GetUpgradesDone returns count of nodes on which upgrade is complete
-// TODO: Drop ctx as it's not used
-//
-//nolint:revive
-func (m *CommonUpgradeManagerImpl) GetUpgradesDone(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetUpgradesDone(
 	currentState *base.ClusterUpgradeState) int {
 	return len(currentState.NodeStates[base.UpgradeStateDone])
 }
 
 // GetUpgradesAvailable returns count of nodes on which upgrade can be done
-func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(
 	currentState *base.ClusterUpgradeState, maxParallelUpgrades int, maxUnavailable int) int {
-	upgradesInProgress := m.GetUpgradesInProgress(ctx, currentState)
-	totalNodes := m.GetTotalManagedNodes(ctx, currentState)
+	upgradesInProgress := m.GetUpgradesInProgress(currentState)
+	totalNodes := m.GetTotalManagedNodes(currentState)
 
 	var upgradesAvailable int
 	if maxParallelUpgrades == 0 {
@@ -773,7 +741,7 @@ func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(ctx context.Context,
 
 	// Apply the maxUnavailable constraint based on the number of nodes unavailable in the cluster
 	// Get nodes in cordoned/not-ready state and also include nodes that are about to be cordoned.
-	currentUnavailableNodes := m.GetCurrentUnavailableNodes(ctx, currentState) +
+	currentUnavailableNodes := m.GetCurrentUnavailableNodes(currentState) +
 		len(currentState.NodeStates[base.UpgradeStateCordonRequired])
 	// always limit upgradesAvailalbe to maxUnavailable
 	if upgradesAvailable > maxUnavailable {
@@ -789,19 +757,13 @@ func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(ctx context.Context,
 }
 
 // GetUpgradesFailed returns count of nodes on which upgrades have failed
-// TODO: Drop ctx as it's not used
-//
-//nolint:revive
-func (m *CommonUpgradeManagerImpl) GetUpgradesFailed(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetUpgradesFailed(
 	currentState *base.ClusterUpgradeState) int {
 	return len(currentState.NodeStates[base.UpgradeStateFailed])
 }
 
 // GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
-// TODO: Drop ctx as it's not used
-//
-//nolint:revive
-func (m *CommonUpgradeManagerImpl) GetUpgradesPending(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) GetUpgradesPending(
 	currentState *base.ClusterUpgradeState) int {
 	return len(currentState.NodeStates[base.UpgradeStateUpgradeRequired])
 }

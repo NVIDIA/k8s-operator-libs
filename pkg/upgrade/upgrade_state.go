@@ -23,7 +23,6 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -172,7 +171,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 // the driver POD running on them and the daemon set, controlling this pod
 func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*base.NodeUpgradeState, error) {
-	var nm *unstructured.Unstructured
+	var nm client.Object
 	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
@@ -183,7 +182,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 		if !ok {
 			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
 		}
-		nm, err = rum.GetNodeMaintenance(ctx, node.Name)
+		nm, err = rum.GetNodeMaintenanceObj(ctx, node.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed while trying to fetch nodeMaintennace obj: %v", err)
 		}
@@ -279,7 +278,7 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return err
 	}
 
-	err = m.ProcessPostMaintenanceNodesWrapper(ctx, currentState)
+	err = m.ProcessNodeMaintenanceRequiredNodesWrapper(ctx, currentState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed for post maintenance")
 		return err
@@ -321,28 +320,31 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx 
 	return err
 }
 
-func (m *ClusterUpgradeStateManagerImpl) ProcessPostMaintenanceNodesWrapper(ctx context.Context,
+func (m *ClusterUpgradeStateManagerImpl) ProcessNodeMaintenanceRequiredNodesWrapper(ctx context.Context,
 	currentState *base.ClusterUpgradeState) error {
 	var err error
 	if m.opts.Requestor.UseMaintenanceOperator {
-		if err = m.requestor.ProcessPostMaintenanceNodes(ctx, currentState); err != nil {
+		if err = m.requestor.ProcessNodeMaintenanceRequiredNodes(ctx, currentState); err != nil {
 			return err
 		}
 	}
-	err = m.inplace.ProcessPostMaintenanceNodes(ctx, currentState)
+	err = m.inplace.ProcessNodeMaintenanceRequiredNodes(ctx, currentState)
 
 	return err
 }
 
 func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodesWrapper(ctx context.Context,
 	currentState *base.ClusterUpgradeState) error {
-	var err error
-	if m.opts.Requestor.UseMaintenanceOperator {
-		if err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState); err != nil {
-			return err
-		}
+	// The idea of calling both inplace and requestor ProcessUncordonRequiredNodes is to handle a case
+	// where some nodes had already undergone inplace upgrage process, and yet to complete it,
+	// before enabling requestor upgrade mode. In this case, although requestor upgrade mode is enabled,
+	// inplace flow will keep processing pending nodes which already started inplace upgrade process.
+	err := m.inplace.ProcessUncordonRequiredNodes(ctx, currentState)
+	if err != nil {
+		return err
 	}
-	err = m.inplace.ProcessUncordonRequiredNodes(ctx, currentState)
-
+	if m.opts.Requestor.UseMaintenanceOperator {
+		err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState)
+	}
 	return err
 }

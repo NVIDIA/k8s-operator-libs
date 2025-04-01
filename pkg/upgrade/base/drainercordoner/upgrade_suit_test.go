@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,20 +47,21 @@ import (
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
-var k8sConfig *rest.Config
-var k8sClient client.Client
-var k8sInterface kubernetes.Interface
-var testEnv *envtest.Environment
-var log logr.Logger
-var nodeUpgradeStateProvider mocks.NodeUpgradeStateProvider
-var drainManager mocks.DrainManager
-var podManager mocks.PodManager
-var cordonManager mocks.CordonManager
-var validationManager mocks.ValidationManager
-var eventRecorder = record.NewFakeRecorder(100)
-
-var createdObjects []client.Object
+var (
+	k8sConfig                *rest.Config
+	k8sClient                client.Client
+	k8sInterface             kubernetes.Interface
+	testEnv                  *envtest.Environment
+	log                      logr.Logger
+	nodeUpgradeStateProvider mocks.NodeUpgradeStateProvider
+	drainManager             mocks.DrainManager
+	podManager               mocks.PodManager
+	cordonManager            mocks.CordonManager
+	validationManager        mocks.ValidationManager
+	eventRecorder            = record.NewFakeRecorder(100)
+	createdObjects           []client.Object
+	testCtx                  context.Context
+)
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -70,6 +72,8 @@ func TestAPIs(t *testing.T) {
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
+	// set up context
+	testCtx = ctrl.SetupSignalHandler()
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{}
 
@@ -116,9 +120,6 @@ var _ = BeforeSuite(func() {
 			func(ctx context.Context, nodeName string) *corev1.Node {
 				return getNode(nodeName)
 			},
-			func(ctx context.Context, nodeName string) error {
-				return nil
-			},
 		)
 
 	drainManager = mocks.DrainManager{}
@@ -139,12 +140,12 @@ var _ = BeforeSuite(func() {
 		On("GetPodDeletionFilter").
 		Return(nil)
 	podManager.
-		On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
+		On("GetPodControllerRevisionHash", mock.Anything).
 		Return(
-			func(ctx context.Context, pod *corev1.Pod) string {
+			func(pod *corev1.Pod) string {
 				return pod.Labels[base.PodControllerRevisionHashLabelKey]
 			},
-			func(ctx context.Context, pod *corev1.Pod) error {
+			func(pod *corev1.Pod) error {
 				return nil
 			},
 		)
@@ -178,9 +179,9 @@ var _ = AfterEach(func() {
 	for i := range createdObjects {
 		r := createdObjects[i]
 		key := client.ObjectKeyFromObject(r)
-		err := k8sClient.Get(context.TODO(), key, r)
-		if err == nil {
-			Expect(k8sClient.Delete(context.TODO(), r)).To(Succeed())
+		err := k8sClient.Delete(context.TODO(), r)
+		if err != nil && !errors.IsNotFound(err) {
+			Expect(err).NotTo(HaveOccurred())
 		}
 		// drain events from FakeRecorder
 		for len(eventRecorder.Events) > 0 {
@@ -207,7 +208,6 @@ func NewNode(name string) Node {
 			Annotations: map[string]string{"dummy-key": "dummy-value"},
 		},
 	}
-	Expect(node.Labels).NotTo(BeNil())
 	return Node{node}
 }
 

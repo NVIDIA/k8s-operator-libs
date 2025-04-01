@@ -16,7 +16,9 @@ limitations under the License.
 
 package requestor
 
-import "os"
+import (
+	"os"
+)
 
 // GetRequestorEnvs returns requstor upgrade related options according to provided environment variables
 func GetRequestorOptsFromEnvs() RequestorOptions {
@@ -32,7 +34,7 @@ func GetRequestorOptsFromEnvs() RequestorOptions {
 	if os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID") != "" {
 		opts.MaintenanceOPRequestorID = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID")
 	} else {
-		opts.MaintenanceOPRequestorID = MaintenanceOPDefaultRequestorID
+		opts.MaintenanceOPRequestorID = "nvidia.operator.com"
 	}
 	return opts
 }
