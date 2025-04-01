@@ -37,11 +37,9 @@ import (
 
 var Scheme = runtime.NewScheme()
 
-// NodeMaintenanceConditionReady designates maintenance operation completed for a designated node
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(Scheme))
 	utilruntime.Must(maintenancev1alpha1.AddToScheme(Scheme))
-	//+kubebuilder:scaffold:scheme
 }
 
 // NewConditionChangedPredicate creates a new ConditionChangedPredicate
@@ -101,7 +99,7 @@ func (p ConditionChangedPredicate) Update(e event.TypedUpdateEvent[client.Object
 	condChanged := !reflect.DeepEqual(oldO.Status.Conditions, newO.Status.Conditions)
 	// Check if the object is marked for deletion
 	deleting := len(newO.Finalizers) == 0 && len(oldO.Finalizers) > 0
-	deleting = deleting || !newO.DeletionTimestamp.IsZero()
+	deleting = deleting && !newO.DeletionTimestamp.IsZero()
 	enqueue := condChanged || deleting
 
 	p.log.V(consts.LogLevelDebug).Info("update event for NodeMaintenance",

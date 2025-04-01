@@ -23,7 +23,6 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,7 +30,7 @@ import (
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/processor"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/commonmanager"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/inplace"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 )
@@ -54,13 +53,13 @@ type ExtendedUpgradeStateManager interface {
 // ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
 type ClusterUpgradeStateManager interface {
 	ExtendedUpgradeStateManager
-	processor.CommonUpgradeStateManager
+	commonmanager.CommonUpgradeStateManager
 }
 
 // ClusterUpgradeStateManagerImpl serves as a state machine for the ClusterUpgradeState
 // It processes each node and based on its state schedules the required jobs to change their state to the next one
 type ClusterUpgradeStateManagerImpl struct {
-	*processor.CommonUpgradeManagerImpl
+	*commonmanager.CommonUpgradeManagerImpl
 	inplace   base.ProcessNodeStateManager
 	requestor base.ProcessNodeStateManager
 	opts      StateOptions
@@ -72,22 +71,22 @@ func NewClusterUpgradeStateManager(
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	processor, err := processor.NewCommonUpgradeStateManager(log, k8sConfig, requestor.Scheme, eventRecorder)
+	commonmanager, err := commonmanager.NewCommonUpgradeStateManager(log, k8sConfig, requestor.Scheme, eventRecorder)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create processor upgrade state manager. %v", err)
+		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
-	request, err := requestor.NewRequestorUpgradeManagerImpl(processor, opts.Requestor)
+	request, err := requestor.NewRequestorUpgradeManagerImpl(commonmanager, opts.Requestor)
 	if err != nil && err != requestor.ErrNodeMaintenanceUpgradeDisabled {
 		return nil, fmt.Errorf("failed to create requestor upgrade state manager. %v", err)
 	}
 
-	inplace, err := inplace.NewInplaceUpgradeManagerImpl(processor)
+	inplace, err := inplace.NewInplaceUpgradeManagerImpl(commonmanager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inplace upgrade state manager. %v", err)
 	}
 
 	manager := &ClusterUpgradeStateManagerImpl{
-		CommonUpgradeManagerImpl: processor,
+		CommonUpgradeManagerImpl: commonmanager,
 		requestor:                request,
 		inplace:                  inplace,
 		opts:                     opts,
@@ -145,7 +144,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	for i := range filteredPodList {
 		pod := &filteredPodList[i]
 		var ownerDaemonSet *appsv1.DaemonSet
-		if processor.IsOrphanedPod(pod) {
+		if commonmanager.IsOrphanedPod(pod) {
 			ownerDaemonSet = nil
 		} else {
 			ownerDaemonSet = daemonSets[pod.OwnerReferences[0].UID]
@@ -172,7 +171,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 // the driver POD running on them and the daemon set, controlling this pod
 func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*base.NodeUpgradeState, error) {
-	var nm *unstructured.Unstructured
+	var nm client.Object
 	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
@@ -183,7 +182,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 		if !ok {
 			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
 		}
-		nm, err = rum.GetNodeMaintenance(ctx, node.Name)
+		nm, err = rum.GetNodeMaintenanceObj(ctx, node.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed while trying to fetch nodeMaintennace obj: %v", err)
 		}
@@ -279,7 +278,7 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return err
 	}
 
-	err = m.ProcessPostMaintenanceNodesWrapper(ctx, currentState)
+	err = m.ProcessNodeMaintenanceRequiredNodesWrapper(ctx, currentState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed for post maintenance")
 		return err
@@ -321,28 +320,31 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx 
 	return err
 }
 
-func (m *ClusterUpgradeStateManagerImpl) ProcessPostMaintenanceNodesWrapper(ctx context.Context,
+func (m *ClusterUpgradeStateManagerImpl) ProcessNodeMaintenanceRequiredNodesWrapper(ctx context.Context,
 	currentState *base.ClusterUpgradeState) error {
 	var err error
 	if m.opts.Requestor.UseMaintenanceOperator {
-		if err = m.requestor.ProcessPostMaintenanceNodes(ctx, currentState); err != nil {
+		if err = m.requestor.ProcessNodeMaintenanceRequiredNodes(ctx, currentState); err != nil {
 			return err
 		}
 	}
-	err = m.inplace.ProcessPostMaintenanceNodes(ctx, currentState)
+	err = m.inplace.ProcessNodeMaintenanceRequiredNodes(ctx, currentState)
 
 	return err
 }
 
 func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodesWrapper(ctx context.Context,
 	currentState *base.ClusterUpgradeState) error {
-	var err error
-	if m.opts.Requestor.UseMaintenanceOperator {
-		if err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState); err != nil {
-			return err
-		}
+	// The idea of calling both inplace and requestor ProcessUncordonRequiredNodes is to handle a case
+	// where some nodes had already undergone inplace upgrage process, and yet to complete it,
+	// before enabling requestor upgrade mode. In this case, although requestor upgrade mode is enabled,
+	// inplace flow will keep processing pending nodes which already started inplace upgrade process.
+	err := m.inplace.ProcessUncordonRequiredNodes(ctx, currentState)
+	if err != nil {
+		return err
 	}
-	err = m.inplace.ProcessUncordonRequiredNodes(ctx, currentState)
-
+	if m.opts.Requestor.UseMaintenanceOperator {
+		err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState)
+	}
 	return err
 }

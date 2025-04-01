@@ -24,8 +24,6 @@ import (
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
@@ -36,13 +34,13 @@ import (
 )
 
 var (
-	DefaultNodeMaintenance maintenancev1alpha1.NodeMaintenance
+	defaultNodeMaintenance *maintenancev1alpha1.NodeMaintenance
 )
 
 func SetDefaultNodeMaintenance(opts RequestorOptions,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) {
 	drainSpec, podCompletion := convertV1Alpha1ToMaintenance(upgradePolicy, opts)
-	DefaultNodeMaintenance = maintenancev1alpha1.NodeMaintenance{
+	defaultNodeMaintenance = &maintenancev1alpha1.NodeMaintenance{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: opts.MaintenanceOPRequestorNS,
 		},
@@ -55,26 +53,22 @@ func SetDefaultNodeMaintenance(opts RequestorOptions,
 }
 
 func (m *UpgradeManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
-	nm := DefaultNodeMaintenance
+	nm := defaultNodeMaintenance.DeepCopy()
 	nm.Name = nodeName
 	nm.Spec.NodeName = nodeName
 
-	return &nm
+	return nm
 }
 
 // CreateNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
 func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeState *base.NodeUpgradeState) error {
 	nm := m.NewNodeMaintenance(nodeState.Node.Name)
-	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
-	if err != nil {
-		return fmt.Errorf("failed to convert maintenancev1alpha1.NodeMaintenance to unstructured: %v", err)
-	}
-	nodeState.NodeMaintenance = &unstructured.Unstructured{Object: objMap}
+	nodeState.NodeMaintenance = nm
 	m.Log.V(consts.LogLevelInfo).Info("creating node maintenance", nodeState.Node.Name, nm.Name)
-	err = m.K8sClient.Create(ctx, nm, &client.CreateOptions{})
+	err := m.K8sClient.Create(ctx, nm, &client.CreateOptions{})
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
-			m.Log.V(consts.LogLevelError).Error(err, "nodeMaintenance")
+			m.Log.V(consts.LogLevelWarning).Info("nodeMaintenance", nm.Name, "already exists")
 			return nil
 		}
 		return fmt.Errorf("failed to create node maintenance '%+v'. %v", nm, err)
@@ -83,22 +77,20 @@ func (m *UpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context, nodeStat
 	return nil
 }
 
-// GetNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
-func (m *UpgradeManagerImpl) GetNodeMaintenance(ctx context.Context,
-	nodeName string) (*unstructured.Unstructured, error) {
+// GetNodeMaintenanceObj creates nodeMaintenance obj for designated node upgrade-required state
+func (m *UpgradeManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
+	nodeName string) (client.Object, error) {
 	nm := &maintenancev1alpha1.NodeMaintenance{}
 	err := m.K8sClient.Get(ctx, types.NamespacedName{
 		Name: nodeName, Namespace: m.opts.MaintenanceOPRequestorNS},
 		nm, &client.GetOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return nil, err
-	}
-	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(nm)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert maintenancev1alpha1.NodeMaintenance to unstructured: %v", err)
+		if !k8serrors.IsNotFound(err) {
+			return nil, err
+		}
+		nm = nil
 	}
-
-	return &unstructured.Unstructured{Object: objMap}, nil
+	return nm, nil
 }
 
 // DeleteNodeMaintenance requests to delete nodeMaintenance obj
@@ -122,16 +114,13 @@ func (m *UpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context, nodeStat
 	return nil
 }
 
-// TODO: Check if this is needed
 func validateNodeMaintenance(nodeState *base.NodeUpgradeState) (*maintenancev1alpha1.NodeMaintenance, error) {
 	if nodeState.NodeMaintenance == nil {
 		return nil, fmt.Errorf("missing nodeMaintenance for specified nodeUpgradeState. %v", nodeState)
 	}
-	nm := &maintenancev1alpha1.NodeMaintenance{}
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(nodeState.NodeMaintenance.Object, nm)
-	if err != nil {
-		return nil, fmt.Errorf(`failed to convert NodeUpgradeState.NodeMaintenance unstructured obj
-		 to maintenancev1alpha1.NodeMaintenance. %v`, nodeState)
+	nm, ok := nodeState.NodeMaintenance.(*maintenancev1alpha1.NodeMaintenance)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast object to NodeMaintenance. %v", nodeState.NodeMaintenance)
 	}
 	return nm, nil
 }
