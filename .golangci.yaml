@@ -100,6 +100,7 @@ linters-settings:
           - github.com/go-logr/logr
           - k8s.io
           - sigs.k8s.io
+          - github.com/spf13/pflag
   dupl:
     threshold: 100
   funlen:
