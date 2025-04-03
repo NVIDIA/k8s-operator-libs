@@ -1,5 +1,5 @@
 /*
-Copyright 2022 NVIDIA CORPORATION & AFFILIATES
+Copyright 2025 NVIDIA CORPORATION & AFFILIATES
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,15 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package base_test
 
 import (
 	"context"
 	"math/rand"
-	"path/filepath"
 	"testing"
 
-	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,9 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,7 +43,6 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -79,21 +76,16 @@ var _ = BeforeSuite(func() {
 	// set up context
 	testCtx = ctrl.SetupSignalHandler()
 	By("bootstrapping test environment")
-	testEnv = &envtest.Environment{
-		CRDDirectoryPaths: []string{filepath.Join("..", "..", "hack", "crd", "bases")},
-	}
+	testEnv = &envtest.Environment{}
 
 	var err error
 	k8sConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
 
-	err = maintenancev1alpha1.AddToScheme(requestor.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	// +kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: requestor.Scheme})
+	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
@@ -255,47 +247,6 @@ func (n Node) Create() *corev1.Node {
 	return node
 }
 
-type NodeMaintenance struct {
-	*maintenancev1alpha1.NodeMaintenance
-}
-
-func NewNodeMaintenance(name, namespace string) NodeMaintenance {
-	nm := &maintenancev1alpha1.NodeMaintenance{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
-			NodeName:    name,
-			RequestorID: "dummy-requestor.com",
-		},
-	}
-
-	return NodeMaintenance{nm}
-}
-
-func (m NodeMaintenance) WithConditions(condition v1.Condition) NodeMaintenance {
-	conditions := []v1.Condition{}
-	conditions = append(conditions, condition)
-	status := maintenancev1alpha1.NodeMaintenanceStatus{
-		Conditions: conditions,
-	}
-	m.Status = status
-	err := k8sClient.Status().Update(context.TODO(), m)
-	Expect(err).NotTo(HaveOccurred())
-
-	return m
-}
-
-func (m NodeMaintenance) Create() *maintenancev1alpha1.NodeMaintenance {
-	nm := m.NodeMaintenance
-	err := k8sClient.Create(context.TODO(), nm)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, nm)
-
-	return nm
-}
-
 type DaemonSet struct {
 	*appsv1.DaemonSet
 
@@ -453,12 +404,17 @@ func getNode(name string) *corev1.Node {
 	return node
 }
 
-func getNodeUpgradeState(node *corev1.Node) string {
-	return node.Labels[base.GetUpgradeStateLabelKey()]
+func deleteObj(obj client.Object) {
+	Expect(k8sClient.Delete(context.TODO(), obj)).To(BeNil())
 }
 
-func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[base.GetUpgradeInitialStateAnnotationKey()]
+func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[base.GetWaitForPodCompletionStartTimeAnnotationKey()]
+	return ok
+}
+
+func isValidationAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[base.GetValidationStartTimeAnnotationKey()]
 	return ok
 }
 

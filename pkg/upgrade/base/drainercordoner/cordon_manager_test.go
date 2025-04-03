@@ -14,28 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrade_test
+package drainercordoner_test
 
 import (
-	"context"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 )
 
 var _ = Describe("CordonManager tests", func() {
 	It("CordonManager should mark a node as schedulable/unschedulable", func() {
-		ctx := context.TODO()
 		node := createNode("test-node")
 
-		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
-		err := cordonManager.Cordon(ctx, node)
+		cordonManager := drainercordoner.NewCordonManager(k8sInterface, log)
+		err := cordonManager.Cordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())
 
-		err = cordonManager.Uncordon(ctx, node)
+		err = cordonManager.Uncordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeFalse())
 	})
