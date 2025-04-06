@@ -1442,7 +1442,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		cancel := withUpgradeRequestorMode(testCtx, namespace)
 		defer cancel()
 
-		clusterState := withClusterUpgradeState(1, base.UpgradeStateNodeMaintenanceRequired, namespace, nil, true)
+		clusterState := withClusterUpgradeState(1, base.UpgradeStateNodeMaintenanceRequired, namespace,
+			map[string]string{base.GetUpgradeRequestedAnnotationKey(): "true"}, true)
 		policy := &v1alpha1.DriverUpgradePolicySpec{
 			AutoUpgrade: true,
 			DrainSpec: &v1alpha1.DrainSpec{
