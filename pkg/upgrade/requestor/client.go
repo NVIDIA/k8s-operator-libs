@@ -88,7 +88,9 @@ func (m *UpgradeManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
 		if !k8serrors.IsNotFound(err) {
 			return nil, err
 		}
-		nm = nil
+		// explicitly return nil so returned interface is truly nil
+		//nolint:nilnil // this is intentional: returning nil obj and nil error to indicate "not found"
+		return nil, nil
 	}
 	return nm, nil
 }
