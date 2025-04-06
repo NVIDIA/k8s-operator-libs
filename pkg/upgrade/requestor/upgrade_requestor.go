@@ -138,12 +138,12 @@ func (m *UpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Con
 			if _, ok := nodeState.Node.Annotations[base.GetUpgradeRequestorModeAnnotationKey()]; !ok {
 				m.Log.V(consts.LogLevelWarning).Info("missing node annotation", "node", nodeState.Node.Name,
 					"annotations", nodeState.Node.Annotations)
-				// update node state back to 'upgrade-required' in case of missing nodeMaintenance obj
-				err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-					base.UpgradeStateUpgradeRequired)
-				if err != nil {
-					return fmt.Errorf("failed to update node state. %v", err)
-				}
+			}
+			// update node state back to 'upgrade-required' in case of missing nodeMaintenance obj
+			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
+				base.UpgradeStateUpgradeRequired)
+			if err != nil {
+				return fmt.Errorf("failed to update node state. %v", err)
 			}
 			continue
 		}
