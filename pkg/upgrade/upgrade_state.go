@@ -351,7 +351,7 @@ func (m *ClusterUpgradeStateManagerImpl) getOrphanedPods(pods []corev1.Pod) []co
 }
 
 func isOrphanedPod(pod *corev1.Pod) bool {
-	return pod.OwnerReferences == nil || len(pod.OwnerReferences) < 1
+	return len(pod.OwnerReferences) < 1
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -776,7 +776,7 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessPodRestartNodes(
 			// Pods should only be scheduled for restart if they are not terminating or restarting already
 			// To determinate terminating state we need to check for deletion timestamp with will be filled
 			// one pod termination process started
-			if nodeState.DriverPod.ObjectMeta.DeletionTimestamp.IsZero() {
+			if nodeState.DriverPod.DeletionTimestamp.IsZero() {
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
