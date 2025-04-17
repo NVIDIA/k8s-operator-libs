@@ -31,8 +31,6 @@ import (
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/commonmanager"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/inplace"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 )
 
 // ExtendedUpgradeStateManager interface purpose is to decouple ApplyState implementation from base package
@@ -71,16 +69,16 @@ func NewClusterUpgradeStateManager(
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	commonmanager, err := commonmanager.NewCommonUpgradeStateManager(log, k8sConfig, requestor.Scheme, eventRecorder)
+	commonmanager, err := commonmanager.NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
-	request, err := requestor.NewRequestorUpgradeManagerImpl(commonmanager, opts.Requestor)
-	if err != nil && err != requestor.ErrNodeMaintenanceUpgradeDisabled {
+	request, err := NewRequestorUpgradeManagerImpl(commonmanager, opts.Requestor)
+	if err != nil && err != ErrNodeMaintenanceUpgradeDisabled {
 		return nil, fmt.Errorf("failed to create requestor upgrade state manager. %v", err)
 	}
 
-	inplace, err := inplace.NewInplaceUpgradeManagerImpl(commonmanager)
+	inplace, err := NewInplaceUpgradeManagerImpl(commonmanager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inplace upgrade state manager. %v", err)
 	}
@@ -96,7 +94,7 @@ func NewClusterUpgradeStateManager(
 }
 
 type StateOptions struct {
-	Requestor requestor.RequestorOptions
+	Requestor RequestorOptions
 }
 
 // BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
@@ -178,7 +176,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 	}
 
 	if m.opts.Requestor.UseMaintenanceOperator {
-		rum, ok := m.requestor.(*requestor.UpgradeManagerImpl)
+		rum, ok := m.requestor.(*RequestorUpgradeManagerImpl)
 		if !ok {
 			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
 		}

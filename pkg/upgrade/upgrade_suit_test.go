@@ -43,9 +43,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -88,12 +88,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
 
-	err = maintenancev1alpha1.AddToScheme(requestor.Scheme)
+	err = maintenancev1alpha1.AddToScheme(upgrade.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: requestor.Scheme})
+	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: upgrade.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 

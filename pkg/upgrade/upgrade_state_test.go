@@ -41,7 +41,6 @@ import (
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 	drainercordoner "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/drainercordoner"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/requestor"
 )
 
 var (
@@ -1700,7 +1699,7 @@ func withUpgradeRequestorMode(testCtx context.Context, namespace string) context
 	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE", namespace)
 	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_ID", "network.opeator.com")
 	_, cancelFn := context.WithCancel(testCtx)
-	opts := requestor.GetRequestorOptsFromEnvs()
+	opts := upgrade.GetRequestorOptsFromEnvs()
 
 	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig,
 		eventRecorder, upgrade.StateOptions{Requestor: opts})
