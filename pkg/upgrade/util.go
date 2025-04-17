@@ -16,29 +16,149 @@ limitations under the License.
 
 package upgrade
 
-import "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+import (
+	"fmt"
+	"strings"
+	"sync"
 
-// SetDriverName is a wrapper to be used by external callers importing upgrade pkg
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+)
+
+// StringSet implements a thread safe Set of Strings
+type StringSet struct {
+	m  map[string]bool
+	mu sync.RWMutex
+}
+
+// NewStringSet creates a StringSet
+func NewStringSet() *StringSet {
+	return &StringSet{
+		m:  make(map[string]bool),
+		mu: sync.RWMutex{},
+	}
+}
+
+// Add item to set
+func (s *StringSet) Add(item string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[item] = true
+}
+
+// Remove deletes the specified item from the set
+func (s *StringSet) Remove(item string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, item)
+}
+
+// Has looks for item exists in the map
+func (s *StringSet) Has(item string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.m[item]
+	return ok
+}
+
+// Clear removes all items from the set
+func (s *StringSet) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m = make(map[string]bool)
+}
+
+// KeyedMutex is a struct that provides a per-key synchronized access
+type KeyedMutex struct {
+	mutexes sync.Map // Zero value is empty and ready for use
+}
+
+// UnlockFunc is a function that release a lock
+type UnlockFunc = func()
+
+// Lock locks a mutex, associated with a given key and returns an unlock function
+func (m *KeyedMutex) Lock(key string) UnlockFunc {
+	value, _ := m.mutexes.LoadOrStore(key, &sync.Mutex{})
+	mtx, ok := value.(*sync.Mutex)
+	if !ok {
+		panic("object is not of type sync.Mutex which is what was expected")
+	}
+	mtx.Lock()
+	return func() { mtx.Unlock() }
+}
+
+var (
+	// DriverName is the name of the driver to be managed by this package
+	DriverName string
+)
+
+// SetDriverName sets the name of the driver managed by the upgrade package
 func SetDriverName(driver string) {
-	base.SetDriverName(driver)
+	DriverName = driver
 }
 
-// GetUpgradeStateLabelKey is a wrapper to be used by external callers importing upgrade pkg
+// GetUpgradeStateLabelKey returns state label key used for upgrades
 func GetUpgradeStateLabelKey() string {
-	return base.GetUpgradeStateLabelKey()
+	return fmt.Sprintf(UpgradeStateLabelKeyFmt, DriverName)
 }
 
-// GetUpgradeSkipNodeLabelKey is a wrapper to be used by external callers importing upgrade pkg
+// GetUpgradeSkipNodeLabelKey returns node label used to skip upgrades
 func GetUpgradeSkipNodeLabelKey() string {
-	return base.GetUpgradeSkipNodeLabelKey()
+	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
 }
 
-// GetUpgradeRequestedAnnotationKey is a wrapper to be used by external callers importing upgrade pkg
-func GetUpgradeRequestedAnnotationKey() string {
-	return base.GetUpgradeRequestedAnnotationKey()
-}
-
-// GetUpgradeDriverWaitForSafeLoadAnnotationKey is a wrapper to be used by external callers importing upgrade pkg
+// GetUpgradeDriverWaitForSafeLoadAnnotationKey returns the key for annotation used to mark node as waiting for driver
+// safe load
 func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
-	return base.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
+	return fmt.Sprintf(UpgradeWaitForSafeDriverLoadAnnotationKeyFmt, DriverName)
+}
+
+// GetUpgradeRequestedAnnotationKey returns the key for annotation used to mark node as driver upgrade is requested
+// externally (orphaned pod)
+func GetUpgradeRequestedAnnotationKey() string {
+	return fmt.Sprintf(UpgradeRequestedAnnotationKeyFmt, DriverName)
+}
+
+// GetUpgradeRequestorModeAnnotationKey returns the key for annotation used to mark node as requestor upgrade mode
+// in progress
+func GetUpgradeRequestorModeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeRequestorModeAnnotationKeyFmt, DriverName)
+}
+
+// GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
+func GetUpgradeInitialStateAnnotationKey() string {
+	return fmt.Sprintf(UpgradeInitialStateAnnotationKeyFmt, DriverName)
+}
+
+// GetWaitForPodCompletionStartTimeAnnotationKey returns the key for annotation used to track start time for waiting on
+// pod/job completions
+func GetWaitForPodCompletionStartTimeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeWaitForPodCompletionStartTimeAnnotationKeyFmt, DriverName)
+}
+
+// GetValidationStartTimeAnnotationKey returns the key for annotation indicating start time for validation-required
+// state
+func GetValidationStartTimeAnnotationKey() string {
+	return fmt.Sprintf(UpgradeValidationStartTimeAnnotationKeyFmt, DriverName)
+}
+
+// GetEventReason returns the reason type based on the driver name
+func GetEventReason() string {
+	return fmt.Sprintf("%sDriverUpgrade", strings.ToUpper(DriverName))
+}
+
+// logEventf logs a formatted event for a given kubernetes object
+func logEventf(recorder record.EventRecorder, object runtime.Object, eventType string, reason string, messageFmt string,
+	args ...interface{}) {
+	if recorder != nil {
+		recorder.Eventf(object, eventType, reason, messageFmt, args...)
+	}
+}
+
+// logEvent logs an event for a given kubernetes object
+func logEvent(recorder record.EventRecorder, object runtime.Object, eventType string, reason string,
+	messageFmt string) {
+	if recorder != nil {
+		recorder.Event(object, eventType, reason, messageFmt)
+	}
 }

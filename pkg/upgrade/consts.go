@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package base
+package upgrade
 
 const (
 	// UpgradeStateLabelKeyFmt is the format of the node label key indicating driver upgrade states
@@ -83,6 +83,6 @@ const (
 	nodeNameFieldSelectorFmt = "spec.nodeName=%s"
 	// nullString is the word null as string to avoid duplication and linting errors
 	nullString = "null"
-	// TrueString is the word true as string to avoid duplication and linting errors
-	TrueString = "true"
+	// trueString is the word true as string to avoid duplication and linting errors
+	trueString = "true"
 )

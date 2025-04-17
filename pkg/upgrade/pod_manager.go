@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package base
+package upgrade
 
 import (
 	"context"
@@ -210,7 +210,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 				err = drainHelper.DeleteOrEvictPods(podDeleteList.Pods())
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to delete pods on the node", "node", node.Name)
-					LogEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
+					logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
 						"Failed to delete workload pods on the node for the driver upgrade, %s", err.Error())
 					m.updateNodeToDrainOrFailed(ctx, node, config.DrainEnabled)
 					return
@@ -218,7 +218,7 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 
 				m.log.V(consts.LogLevelInfo).Info("Deleted pods on the node", "node", node.Name)
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, &node, UpgradeStatePodRestartRequired)
-				LogEvent(m.eventRecorder, &node, corev1.EventTypeNormal, GetEventReason(),
+				logEvent(m.eventRecorder, &node, corev1.EventTypeNormal, GetEventReason(),
 					"Deleted workload pods on the node for the driver upgrade")
 			}(*node)
 		} else {
@@ -242,7 +242,7 @@ func (m *PodManagerImpl) SchedulePodsRestart(ctx context.Context, pods []*corev1
 		err := m.k8sInterface.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOptions)
 		if err != nil {
 			m.log.V(consts.LogLevelInfo).Error(err, "Failed to delete pod", "pod", pod.Name)
-			LogEventf(m.eventRecorder, pod, corev1.EventTypeWarning, GetEventReason(),
+			logEventf(m.eventRecorder, pod, corev1.EventTypeWarning, GetEventReason(),
 				"Failed to restart driver pod %s", err.Error())
 			return err
 		}
@@ -290,7 +290,7 @@ func (m *PodManagerImpl) ScheduleCheckOnPodCompletion(ctx context.Context, confi
 				if config.WaitForCompletionSpec.TimeoutSecond != 0 {
 					err = m.HandleTimeoutOnPodCompletions(ctx, &node, int64(config.WaitForCompletionSpec.TimeoutSecond))
 					if err != nil {
-						LogEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
+						logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
 							"Failed to handle timeout for job completions, %s", err.Error())
 						return
 					}
@@ -301,7 +301,7 @@ func (m *PodManagerImpl) ScheduleCheckOnPodCompletion(ctx context.Context, confi
 			annotationKey := GetWaitForPodCompletionStartTimeAnnotationKey()
 			err = m.nodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, &node, annotationKey, "null")
 			if err != nil {
-				LogEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
+				logEventf(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
 					"Failed to remove annotation used to track job completions: %s", err.Error())
 				return
 			}
@@ -395,7 +395,7 @@ func (m *PodManagerImpl) updateNodeToDrainOrFailed(ctx context.Context, node cor
 	if drainEnabled {
 		m.log.V(consts.LogLevelInfo).Info("Pod deletion failed but drain is enabled in spec. Will attempt a node drain",
 			"node", node.Name)
-		LogEvent(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
+		logEvent(m.eventRecorder, &node, corev1.EventTypeWarning, GetEventReason(),
 			"Pod deletion failed but drain is enabled in spec. Will attempt a node drain")
 		nextState = UpgradeStateDrainRequired
 	}

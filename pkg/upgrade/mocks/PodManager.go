@@ -22,7 +22,7 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 
-	base "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 
 	v1 "k8s.io/api/apps/v1"
 )
@@ -75,15 +75,15 @@ func (_m *PodManager) GetPodControllerRevisionHash(pod *corev1.Pod) (string, err
 }
 
 // GetPodDeletionFilter provides a mock function with given fields:
-func (_m *PodManager) GetPodDeletionFilter() base.PodDeletionFilter {
+func (_m *PodManager) GetPodDeletionFilter() upgrade.PodDeletionFilter {
 	ret := _m.Called()
 
-	var r0 base.PodDeletionFilter
-	if rf, ok := ret.Get(0).(func() base.PodDeletionFilter); ok {
+	var r0 upgrade.PodDeletionFilter
+	if rf, ok := ret.Get(0).(func() upgrade.PodDeletionFilter); ok {
 		r0 = rf()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(base.PodDeletionFilter)
+			r0 = ret.Get(0).(upgrade.PodDeletionFilter)
 		}
 	}
 
@@ -91,11 +91,11 @@ func (_m *PodManager) GetPodDeletionFilter() base.PodDeletionFilter {
 }
 
 // ScheduleCheckOnPodCompletion provides a mock function with given fields: ctx, config
-func (_m *PodManager) ScheduleCheckOnPodCompletion(ctx context.Context, config *base.PodManagerConfig) error {
+func (_m *PodManager) ScheduleCheckOnPodCompletion(ctx context.Context, config *upgrade.PodManagerConfig) error {
 	ret := _m.Called(ctx, config)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *base.PodManagerConfig) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *upgrade.PodManagerConfig) error); ok {
 		r0 = rf(ctx, config)
 	} else {
 		r0 = ret.Error(0)
@@ -105,11 +105,11 @@ func (_m *PodManager) ScheduleCheckOnPodCompletion(ctx context.Context, config *
 }
 
 // SchedulePodEviction provides a mock function with given fields: ctx, config
-func (_m *PodManager) SchedulePodEviction(ctx context.Context, config *base.PodManagerConfig) error {
+func (_m *PodManager) SchedulePodEviction(ctx context.Context, config *upgrade.PodManagerConfig) error {
 	ret := _m.Called(ctx, config)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *base.PodManagerConfig) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *upgrade.PodManagerConfig) error); ok {
 		r0 = rf(ctx, config)
 	} else {
 		r0 = ret.Error(0)

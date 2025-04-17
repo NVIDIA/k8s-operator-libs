@@ -11,7 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package drainercordoner
+package upgrade
 
 import (
 	"context"
@@ -27,7 +27,6 @@ import (
 
 	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
 )
 
 // DrainConfiguration contains the drain specification and the list of nodes to schedule drain on
@@ -39,8 +38,8 @@ type DrainConfiguration struct {
 // DrainManagerImpl implements DrainManager interface and can perform nodes drain based on received DrainConfiguration
 type DrainManagerImpl struct {
 	k8sInterface             kubernetes.Interface
-	drainingNodes            *base.StringSet
-	nodeUpgradeStateProvider base.NodeUpgradeStateProvider
+	drainingNodes            *StringSet
+	nodeUpgradeStateProvider NodeUpgradeStateProvider
 	log                      logr.Logger
 	eventRecorder            record.EventRecorder
 }
@@ -104,7 +103,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 		node := node
 		if !m.drainingNodes.Has(node.Name) {
 			m.log.V(consts.LogLevelInfo).Info("Schedule drain for node", "node", node.Name)
-			base.LogEvent(m.eventRecorder, node, corev1.EventTypeNormal, base.GetEventReason(), "Scheduling drain of the node")
+			logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Scheduling drain of the node")
 
 			m.drainingNodes.Add(node.Name)
 			go func() {
@@ -112,8 +111,8 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				err := drain.RunCordonOrUncordon(drainHelper, node, true)
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to cordon node", "node", node.Name)
-					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateFailed)
-					base.LogEventf(m.eventRecorder, node, corev1.EventTypeWarning, base.GetEventReason(),
+					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
+					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
 						"Failed to cordon the node, %s", err.Error())
 					return
 				}
@@ -122,15 +121,15 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				err = drain.RunNodeDrain(drainHelper, node.Name)
 				if err != nil {
 					m.log.V(consts.LogLevelError).Error(err, "Failed to drain node", "node", node.Name)
-					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStateFailed)
-					base.LogEventf(m.eventRecorder, node, corev1.EventTypeWarning, base.GetEventReason(),
+					_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStateFailed)
+					logEventf(m.eventRecorder, node, corev1.EventTypeWarning, GetEventReason(),
 						"Failed to drain the node, %s", err.Error())
 					return
 				}
 				m.log.V(consts.LogLevelInfo).Info("Drained the node", "node", node.Name)
-				base.LogEvent(m.eventRecorder, node, corev1.EventTypeNormal, base.GetEventReason(), "Successfully drained the node")
+				logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
 
-				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, base.UpgradeStatePodRestartRequired)
+				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStatePodRestartRequired)
 			}()
 		} else {
 			m.log.V(consts.LogLevelInfo).Info("Node is already being drained, skipping", "node", node.Name)
@@ -142,13 +141,13 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 // NewDrainManager creates a DrainManager
 func NewDrainManager(
 	k8sInterface kubernetes.Interface,
-	nodeUpgradeStateProvider base.NodeUpgradeStateProvider,
+	nodeUpgradeStateProvider NodeUpgradeStateProvider,
 	log logr.Logger,
 	eventRecorder record.EventRecorder) *DrainManagerImpl {
 	mgr := &DrainManagerImpl{
 		k8sInterface:             k8sInterface,
 		log:                      log,
-		drainingNodes:            base.NewStringSet(),
+		drainingNodes:            NewStringSet(),
 		nodeUpgradeStateProvider: nodeUpgradeStateProvider,
 		eventRecorder:            eventRecorder,
 	}

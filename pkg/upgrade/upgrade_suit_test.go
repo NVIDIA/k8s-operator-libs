@@ -43,8 +43,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
 	// +kubebuilder:scaffold:imports
 )
@@ -104,13 +103,13 @@ var _ = BeforeSuite(func() {
 	log = ctrl.Log.WithName("upgradeSuitTest")
 
 	// set driver name to be managed by the upgrade-manager
-	base.SetDriverName("gpu")
+	upgrade.SetDriverName("gpu")
 
 	nodeUpgradeStateProvider = mocks.NodeUpgradeStateProvider{}
 	nodeUpgradeStateProvider.
 		On("ChangeNodeUpgradeState", mock.Anything, mock.Anything, mock.Anything).
 		Return(func(ctx context.Context, node *corev1.Node, newNodeState string) error {
-			node.Labels[base.GetUpgradeStateLabelKey()] = newNodeState
+			node.Labels[upgrade.GetUpgradeStateLabelKey()] = newNodeState
 			return nil
 		})
 	nodeUpgradeStateProvider.
@@ -155,7 +154,7 @@ var _ = BeforeSuite(func() {
 		On("GetPodControllerRevisionHash", mock.Anything).
 		Return(
 			func(pod *corev1.Pod) string {
-				return pod.Labels[base.PodControllerRevisionHashLabelKey]
+				return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
 			},
 			func(pod *corev1.Pod) error {
 				return nil
@@ -228,7 +227,7 @@ func (n Node) WithUpgradeState(state string) Node {
 	if n.Labels == nil {
 		n.Labels = make(map[string]string)
 	}
-	n.Labels[base.GetUpgradeStateLabelKey()] = state
+	n.Labels[upgrade.GetUpgradeStateLabelKey()] = state
 	return n
 }
 
@@ -454,11 +453,25 @@ func getNode(name string) *corev1.Node {
 }
 
 func getNodeUpgradeState(node *corev1.Node) string {
-	return node.Labels[base.GetUpgradeStateLabelKey()]
+	return node.Labels[upgrade.GetUpgradeStateLabelKey()]
 }
 
 func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
-	_, ok := node.Annotations[base.GetUpgradeInitialStateAnnotationKey()]
+	_, ok := node.Annotations[upgrade.GetUpgradeInitialStateAnnotationKey()]
+	return ok
+}
+
+func deleteObj(obj client.Object) {
+	Expect(k8sClient.Delete(context.TODO(), obj)).To(BeNil())
+}
+
+func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[upgrade.GetWaitForPodCompletionStartTimeAnnotationKey()]
+	return ok
+}
+
+func isValidationAnnotationPresent(node *corev1.Node) bool {
+	_, ok := node.Annotations[upgrade.GetValidationStartTimeAnnotationKey()]
 	return ok
 }
 

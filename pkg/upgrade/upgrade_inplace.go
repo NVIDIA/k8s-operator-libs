@@ -23,17 +23,15 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/commonmanager"
 )
 
 // InplaceUpgradeManagerImpl contains concrete implementations for distinct inplace upgrade mode
 type InplaceUpgradeManagerImpl struct {
-	*commonmanager.CommonUpgradeManagerImpl
+	*CommonUpgradeManagerImpl
 }
 
 // NewClusterUpgradeStateManager creates a new instance of InplaceUpgradeManagerImpl
-func NewInplaceUpgradeManagerImpl(commonmanager *commonmanager.CommonUpgradeManagerImpl) (base.ProcessNodeStateManager,
+func NewInplaceUpgradeManagerImpl(commonmanager *CommonUpgradeManagerImpl) (ProcessNodeStateManager,
 	error) {
 	manager := &InplaceUpgradeManagerImpl{
 		CommonUpgradeManagerImpl: commonmanager,
@@ -44,7 +42,7 @@ func NewInplaceUpgradeManagerImpl(commonmanager *commonmanager.CommonUpgradeMana
 // ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
 // until the limit on max parallel upgrades is reached.
 func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
-	ctx context.Context, currentClusterState *base.ClusterUpgradeState,
+	ctx context.Context, currentClusterState *ClusterUpgradeState,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	var err error
 
@@ -70,11 +68,11 @@ func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 		"total number of nodes", totalNodes,
 		"maximum nodes that can be unavailable", maxUnavailable)
 
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUpgradeRequired] {
 		if m.IsUpgradeRequested(nodeState.Node) {
 			// Make sure to remove the upgrade-requested annotation
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
-				base.GetUpgradeRequestedAnnotationKey(), "null")
+				GetUpgradeRequestedAnnotationKey(), "null")
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to delete node upgrade-requested annotation")
@@ -98,14 +96,14 @@ func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 			}
 		}
 
-		err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateCordonRequired)
+		err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateCordonRequired)
 		if err == nil {
 			upgradesAvailable--
 			m.Log.V(consts.LogLevelInfo).Info("Node waiting for cordon",
 				"node", nodeState.Node.Name)
 		} else {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", base.UpgradeStateCordonRequired)
+				err, "Failed to change node upgrade state", "state", UpgradeStateCordonRequired)
 			return err
 		}
 	}
@@ -114,7 +112,7 @@ func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 }
 
 func (m *InplaceUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
-	currentClusterState *base.ClusterUpgradeState) error {
+	currentClusterState *ClusterUpgradeState) error {
 	// TODO: in future versions we'll remove 'pod-restart-required' and use 'post-maintenance-required' instead
 	return m.ProcessPodRestartNodes(ctx, currentClusterState)
 }
@@ -122,10 +120,10 @@ func (m *InplaceUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx cont
 // ProcessUncordonRequiredNodes processes UpgradeStateUncordonRequired nodes,
 // uncordons them and moves them to UpgradeStateDone state
 func (m *InplaceUpgradeManagerImpl) ProcessUncordonRequiredNodes(
-	ctx context.Context, currentClusterState *base.ClusterUpgradeState) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUncordonRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUncordonRequired] {
 		// skip in case node had undergone uncordon by maintenance operator
 		if nodeState.NodeMaintenance != nil {
 			continue
@@ -136,10 +134,10 @@ func (m *InplaceUpgradeManagerImpl) ProcessUncordonRequiredNodes(
 				err, "Node uncordon failed", "node", nodeState.Node)
 			return err
 		}
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateDone)
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", base.UpgradeStateDone)
+				err, "Failed to change node upgrade state", "state", UpgradeStateDone)
 			return err
 		}
 	}

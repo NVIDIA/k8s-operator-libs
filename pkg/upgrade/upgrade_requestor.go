@@ -41,8 +41,6 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/commonmanager"
 )
 
 const (
@@ -81,7 +79,7 @@ type RequestorOptions struct {
 // RequestorUpgradeManagerImpl contains concrete implementations for distinct requestor
 // (e.g. maintenance OP) upgrade mode
 type RequestorUpgradeManagerImpl struct {
-	*commonmanager.CommonUpgradeManagerImpl
+	*CommonUpgradeManagerImpl
 	opts RequestorOptions
 }
 
@@ -171,7 +169,7 @@ func (m *RequestorUpgradeManagerImpl) NewNodeMaintenance(nodeName string) *maint
 
 // CreateNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
 func (m *RequestorUpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context,
-	nodeState *base.NodeUpgradeState) error {
+	nodeState *NodeUpgradeState) error {
 	nm := m.NewNodeMaintenance(nodeState.Node.Name)
 	nodeState.NodeMaintenance = nm
 	m.Log.V(consts.LogLevelInfo).Info("creating node maintenance", nodeState.Node.Name, nm.Name)
@@ -207,7 +205,7 @@ func (m *RequestorUpgradeManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
 
 // DeleteNodeMaintenance requests to delete nodeMaintenance obj
 func (m *RequestorUpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context,
-	nodeState *base.NodeUpgradeState) error {
+	nodeState *NodeUpgradeState) error {
 	_, err := validateNodeMaintenance(nodeState)
 	if err != nil {
 		return err
@@ -227,7 +225,7 @@ func (m *RequestorUpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context,
 	return nil
 }
 
-func validateNodeMaintenance(nodeState *base.NodeUpgradeState) (*maintenancev1alpha1.NodeMaintenance, error) {
+func validateNodeMaintenance(nodeState *NodeUpgradeState) (*maintenancev1alpha1.NodeMaintenance, error) {
 	if nodeState.NodeMaintenance == nil {
 		return nil, fmt.Errorf("missing nodeMaintenance for specified nodeUpgradeState. %v", nodeState)
 	}
@@ -240,8 +238,8 @@ func validateNodeMaintenance(nodeState *base.NodeUpgradeState) (*maintenancev1al
 
 // NewRequestorUpgradeManagerImpl creates a new instance of (requestor) RequestorUpgradeManagerImpl
 func NewRequestorUpgradeManagerImpl(
-	common *commonmanager.CommonUpgradeManagerImpl,
-	opts RequestorOptions) (base.ProcessNodeStateManager, error) {
+	common *CommonUpgradeManagerImpl,
+	opts RequestorOptions) (ProcessNodeStateManager, error) {
 	if !opts.UseMaintenanceOperator {
 		common.Log.V(consts.LogLevelInfo).Info("node maintenance upgrade mode is disabled")
 		return nil, ErrNodeMaintenanceUpgradeDisabled
@@ -257,16 +255,16 @@ func NewRequestorUpgradeManagerImpl(
 // ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
 // until the limit on max parallel upgrades is reached.
 func (m *RequestorUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
-	ctx context.Context, currentClusterState *base.ClusterUpgradeState,
+	ctx context.Context, currentClusterState *ClusterUpgradeState,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeRequiredNodes")
 
 	SetDefaultNodeMaintenance(m.opts, upgradePolicy)
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUpgradeRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUpgradeRequired] {
 		if m.IsUpgradeRequested(nodeState.Node) {
 			// Make sure to remove the upgrade-requested annotation
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
-				base.GetUpgradeRequestedAnnotationKey(), "null")
+				GetUpgradeRequestedAnnotationKey(), "null")
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to delete node upgrade-requested annotation")
@@ -284,14 +282,14 @@ func (m *RequestorUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 			return err
 		}
 
-		annotationKey := base.GetUpgradeRequestorModeAnnotationKey()
+		annotationKey := GetUpgradeRequestorModeAnnotationKey()
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, "true")
 		if err != nil {
 			return fmt.Errorf("failed annotate node for 'upgrade-requestor-mode'. %v", err)
 		}
 		// update node state to 'node-maintenance-required'
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-			base.UpgradeStateNodeMaintenanceRequired)
+			UpgradeStateNodeMaintenanceRequired)
 		if err != nil {
 			return fmt.Errorf("failed to update node state. %v", err)
 		}
@@ -305,17 +303,17 @@ func (m *RequestorUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 // the motivation is later to replace ProcessPodRestartNodes to a generic post node operation
 // while using maintenance operator (e.g. post-maintenance-required)
 func (m *RequestorUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
-	currentClusterState *base.ClusterUpgradeState) error {
+	currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessNodeMaintenanceRequiredNodes")
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateNodeMaintenanceRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateNodeMaintenanceRequired] {
 		if nodeState.NodeMaintenance == nil {
-			if _, ok := nodeState.Node.Annotations[base.GetUpgradeRequestorModeAnnotationKey()]; !ok {
+			if _, ok := nodeState.Node.Annotations[GetUpgradeRequestorModeAnnotationKey()]; !ok {
 				m.Log.V(consts.LogLevelWarning).Info("missing node annotation", "node", nodeState.Node.Name,
 					"annotations", nodeState.Node.Annotations)
 			}
 			// update node state back to 'upgrade-required' in case of missing nodeMaintenance obj
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-				base.UpgradeStateUpgradeRequired)
+				UpgradeStateUpgradeRequired)
 			if err != nil {
 				return fmt.Errorf("failed to update node state. %v", err)
 			}
@@ -331,7 +329,7 @@ func (m *RequestorUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx co
 				m.Log.V(consts.LogLevelDebug).Info("node maintenance operation completed", nm.Spec.NodeName, cond.Reason)
 				// update node state to 'pod-restart-required'
 				err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-					base.UpgradeStatePodRestartRequired)
+					UpgradeStatePodRestartRequired)
 				if err != nil {
 					return fmt.Errorf("failed to update node state. %v", err)
 				}
@@ -343,10 +341,10 @@ func (m *RequestorUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx co
 }
 
 func (m *RequestorUpgradeManagerImpl) ProcessUncordonRequiredNodes(
-	ctx context.Context, currentClusterState *base.ClusterUpgradeState) error {
+	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 
-	for _, nodeState := range currentClusterState.NodeStates[base.UpgradeStateUncordonRequired] {
+	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUncordonRequired] {
 		m.Log.V(consts.LogLevelDebug).Info("deleting node maintenance",
 			nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
 		// skip in case node undergoes uncordon by inplace flow
@@ -363,20 +361,20 @@ func (m *RequestorUpgradeManagerImpl) ProcessUncordonRequiredNodes(
 		}
 		// this means that node maintenance obj has been deleted
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-			base.UpgradeStateDone)
+			UpgradeStateDone)
 		if err != nil {
 			return fmt.Errorf("failed to update node state. %v", err)
 		}
 		// remove requestor upgrade annotation
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx,
-			nodeState.Node, base.GetUpgradeRequestorModeAnnotationKey(), "null")
+			nodeState.Node, GetUpgradeRequestorModeAnnotationKey(), "null")
 		if err != nil {
-			return fmt.Errorf("failed to remove '%s' annotation . %v", base.GetUpgradeRequestorModeAnnotationKey(), err)
+			return fmt.Errorf("failed to remove '%s' annotation . %v", GetUpgradeRequestorModeAnnotationKey(), err)
 		}
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, base.UpgradeStateDone)
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", base.UpgradeStateDone)
+				err, "Failed to change node upgrade state", "state", UpgradeStateDone)
 			return err
 		}
 	}

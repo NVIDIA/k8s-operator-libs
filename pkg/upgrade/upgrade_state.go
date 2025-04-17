@@ -29,8 +29,6 @@ import (
 
 	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base"
-	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/base/commonmanager"
 )
 
 // ExtendedUpgradeStateManager interface purpose is to decouple ApplyState implementation from base package
@@ -38,28 +36,28 @@ import (
 type ExtendedUpgradeStateManager interface {
 	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 	BuildState(ctx context.Context, namespace string,
-		driverLabels map[string]string) (*base.ClusterUpgradeState, error)
+		driverLabels map[string]string) (*ClusterUpgradeState, error)
 	// ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
 	// Based on the current state of the node, it is calculated if the node can be moved to the next state right now
 	// or whether any actions need to be scheduled for the node to move to the next state.
 	// The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
 	// ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 	ApplyState(ctx context.Context,
-		currentState *base.ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error)
+		currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error)
 }
 
 // ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
 type ClusterUpgradeStateManager interface {
 	ExtendedUpgradeStateManager
-	commonmanager.CommonUpgradeStateManager
+	CommonUpgradeStateManager
 }
 
 // ClusterUpgradeStateManagerImpl serves as a state machine for the ClusterUpgradeState
 // It processes each node and based on its state schedules the required jobs to change their state to the next one
 type ClusterUpgradeStateManagerImpl struct {
-	*commonmanager.CommonUpgradeManagerImpl
-	inplace   base.ProcessNodeStateManager
-	requestor base.ProcessNodeStateManager
+	*CommonUpgradeManagerImpl
+	inplace   ProcessNodeStateManager
+	requestor ProcessNodeStateManager
 	opts      StateOptions
 }
 
@@ -69,7 +67,7 @@ func NewClusterUpgradeStateManager(
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	commonmanager, err := commonmanager.NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
+	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
@@ -99,10 +97,10 @@ type StateOptions struct {
 
 // BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespace string,
-	driverLabels map[string]string) (*base.ClusterUpgradeState, error) {
+	driverLabels map[string]string) (*ClusterUpgradeState, error) {
 	m.Log.V(consts.LogLevelInfo).Info("Building state")
 
-	upgradeState := base.NewClusterUpgradeState()
+	upgradeState := NewClusterUpgradeState()
 
 	daemonSets, err := m.GetDriverDaemonSets(ctx, namespace, driverLabels)
 	if err != nil {
@@ -142,7 +140,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	for i := range filteredPodList {
 		pod := &filteredPodList[i]
 		var ownerDaemonSet *appsv1.DaemonSet
-		if commonmanager.IsOrphanedPod(pod) {
+		if IsOrphanedPod(pod) {
 			ownerDaemonSet = nil
 		} else {
 			ownerDaemonSet = daemonSets[pod.OwnerReferences[0].UID]
@@ -168,7 +166,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 // BuildNodeUpgradeState creates a mapping between a node,
 // the driver POD running on them and the daemon set, controlling this pod
 func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
-	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*base.NodeUpgradeState, error) {
+	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
 	var nm client.Object
 	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
 	if err != nil {
@@ -190,7 +188,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
 		"node", node.Name, "state", node.Labels[upgradeStateLabel])
 
-	return &base.NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil
+	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -199,7 +197,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
 // The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
 // ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
-	currentState *base.ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error) {
+	currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error) {
 	m.Log.V(consts.LogLevelInfo).Info("State Manager, got state update")
 
 	if currentState == nil {
@@ -212,19 +210,19 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	}
 
 	m.Log.V(consts.LogLevelInfo).Info("Node states:",
-		"Unknown", len(currentState.NodeStates[base.UpgradeStateUnknown]),
-		base.UpgradeStateDone, len(currentState.NodeStates[base.UpgradeStateDone]),
-		base.UpgradeStateUpgradeRequired, len(currentState.NodeStates[base.UpgradeStateUpgradeRequired]),
-		base.UpgradeStateCordonRequired, len(currentState.NodeStates[base.UpgradeStateCordonRequired]),
-		base.UpgradeStateWaitForJobsRequired, len(currentState.NodeStates[base.UpgradeStateWaitForJobsRequired]),
-		base.UpgradeStatePodDeletionRequired, len(currentState.NodeStates[base.UpgradeStatePodDeletionRequired]),
-		base.UpgradeStateFailed, len(currentState.NodeStates[base.UpgradeStateFailed]),
-		base.UpgradeStateDrainRequired, len(currentState.NodeStates[base.UpgradeStateDrainRequired]),
-		base.UpgradeStateNodeMaintenanceRequired, len(currentState.NodeStates[base.UpgradeStateNodeMaintenanceRequired]),
-		base.UpgradeStatePostMaintenanceRequired, len(currentState.NodeStates[base.UpgradeStatePostMaintenanceRequired]),
-		base.UpgradeStatePodRestartRequired, len(currentState.NodeStates[base.UpgradeStatePodRestartRequired]),
-		base.UpgradeStateValidationRequired, len(currentState.NodeStates[base.UpgradeStateValidationRequired]),
-		base.UpgradeStateUncordonRequired, len(currentState.NodeStates[base.UpgradeStateUncordonRequired]))
+		"Unknown", len(currentState.NodeStates[UpgradeStateUnknown]),
+		UpgradeStateDone, len(currentState.NodeStates[UpgradeStateDone]),
+		UpgradeStateUpgradeRequired, len(currentState.NodeStates[UpgradeStateUpgradeRequired]),
+		UpgradeStateCordonRequired, len(currentState.NodeStates[UpgradeStateCordonRequired]),
+		UpgradeStateWaitForJobsRequired, len(currentState.NodeStates[UpgradeStateWaitForJobsRequired]),
+		UpgradeStatePodDeletionRequired, len(currentState.NodeStates[UpgradeStatePodDeletionRequired]),
+		UpgradeStateFailed, len(currentState.NodeStates[UpgradeStateFailed]),
+		UpgradeStateDrainRequired, len(currentState.NodeStates[UpgradeStateDrainRequired]),
+		UpgradeStateNodeMaintenanceRequired, len(currentState.NodeStates[UpgradeStateNodeMaintenanceRequired]),
+		UpgradeStatePostMaintenanceRequired, len(currentState.NodeStates[UpgradeStatePostMaintenanceRequired]),
+		UpgradeStatePodRestartRequired, len(currentState.NodeStates[UpgradeStatePodRestartRequired]),
+		UpgradeStateValidationRequired, len(currentState.NodeStates[UpgradeStateValidationRequired]),
+		UpgradeStateUncordonRequired, len(currentState.NodeStates[UpgradeStateUncordonRequired]))
 
 	// Determine the object to log this event
 	// m.EventRecorder.Eventf(m.Namespace, v1.EventTypeNormal, GetEventReason(),
@@ -232,21 +230,21 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	// upgradePolicy.MaxParallelUpgrades, upgradesAvailable)
 
 	// First, check if unknown or ready nodes need to be upgraded
-	err = m.ProcessDoneOrUnknownNodes(ctx, currentState, base.UpgradeStateUnknown)
+	err = m.ProcessDoneOrUnknownNodes(ctx, currentState, UpgradeStateUnknown)
 	if err != nil {
-		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes", "state", base.UpgradeStateUnknown)
+		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes", "state", UpgradeStateUnknown)
 		return err
 	}
-	err = m.ProcessDoneOrUnknownNodes(ctx, currentState, base.UpgradeStateDone)
+	err = m.ProcessDoneOrUnknownNodes(ctx, currentState, UpgradeStateDone)
 	if err != nil {
-		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes", "state", base.UpgradeStateDone)
+		m.Log.V(consts.LogLevelError).Error(err, "Failed to process nodes", "state", UpgradeStateDone)
 		return err
 	}
 	// Start upgrade process for upgradesAvailable number of nodes
 	err = m.ProcessUpgradeRequiredNodesWrapper(ctx, currentState, upgradePolicy)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
-			err, "Failed to process nodes", "state", base.UpgradeStateUpgradeRequired)
+			err, "Failed to process nodes", "state", UpgradeStateUpgradeRequired)
 		return err
 	}
 
@@ -302,12 +300,12 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	return nil
 }
 
-func (m *ClusterUpgradeStateManagerImpl) GetRequestor() base.ProcessNodeStateManager {
+func (m *ClusterUpgradeStateManagerImpl) GetRequestor() ProcessNodeStateManager {
 	return m.requestor
 }
 
 func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx context.Context,
-	currentState *base.ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
+	currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	var err error
 	// Start upgrade process for upgradesAvailable number of nodes
 	if m.opts.Requestor.UseMaintenanceOperator {
@@ -319,7 +317,7 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUpgradeRequiredNodesWrapper(ctx 
 }
 
 func (m *ClusterUpgradeStateManagerImpl) ProcessNodeMaintenanceRequiredNodesWrapper(ctx context.Context,
-	currentState *base.ClusterUpgradeState) error {
+	currentState *ClusterUpgradeState) error {
 	var err error
 	if m.opts.Requestor.UseMaintenanceOperator {
 		if err = m.requestor.ProcessNodeMaintenanceRequiredNodes(ctx, currentState); err != nil {
@@ -332,7 +330,7 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessNodeMaintenanceRequiredNodesWrap
 }
 
 func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodesWrapper(ctx context.Context,
-	currentState *base.ClusterUpgradeState) error {
+	currentState *ClusterUpgradeState) error {
 	// The idea of calling both inplace and requestor ProcessUncordonRequiredNodes is to handle a case
 	// where some nodes had already undergone inplace upgrage process, and yet to complete it,
 	// before enabling requestor upgrade mode. In this case, although requestor upgrade mode is enabled,
