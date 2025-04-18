@@ -76,9 +76,9 @@ type RequestorOptions struct {
 	MaintenanceOPPodEvictionFilter []maintenancev1alpha1.PodEvictionFiterEntry
 }
 
-// RequestorUpgradeManagerImpl contains concrete implementations for distinct requestor
+// RequestorNodeStateManagerImpl contains concrete implementations for distinct requestor
 // (e.g. maintenance OP) upgrade mode
-type RequestorUpgradeManagerImpl struct {
+type RequestorNodeStateManagerImpl struct {
 	*CommonUpgradeManagerImpl
 	opts RequestorOptions
 }
@@ -159,7 +159,7 @@ func SetDefaultNodeMaintenance(opts RequestorOptions,
 	}
 }
 
-func (m *RequestorUpgradeManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
+func (m *RequestorNodeStateManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
 	nm := defaultNodeMaintenance.DeepCopy()
 	nm.Name = nodeName
 	nm.Spec.NodeName = nodeName
@@ -168,7 +168,7 @@ func (m *RequestorUpgradeManagerImpl) NewNodeMaintenance(nodeName string) *maint
 }
 
 // CreateNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
-func (m *RequestorUpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context,
+func (m *RequestorNodeStateManagerImpl) CreateNodeMaintenance(ctx context.Context,
 	nodeState *NodeUpgradeState) error {
 	nm := m.NewNodeMaintenance(nodeState.Node.Name)
 	nodeState.NodeMaintenance = nm
@@ -186,7 +186,7 @@ func (m *RequestorUpgradeManagerImpl) CreateNodeMaintenance(ctx context.Context,
 }
 
 // GetNodeMaintenanceObj creates nodeMaintenance obj for designated node upgrade-required state
-func (m *RequestorUpgradeManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
+func (m *RequestorNodeStateManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
 	nodeName string) (client.Object, error) {
 	nm := &maintenancev1alpha1.NodeMaintenance{}
 	err := m.K8sClient.Get(ctx, types.NamespacedName{
@@ -204,7 +204,7 @@ func (m *RequestorUpgradeManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
 }
 
 // DeleteNodeMaintenance requests to delete nodeMaintenance obj
-func (m *RequestorUpgradeManagerImpl) DeleteNodeMaintenance(ctx context.Context,
+func (m *RequestorNodeStateManagerImpl) DeleteNodeMaintenance(ctx context.Context,
 	nodeState *NodeUpgradeState) error {
 	_, err := validateNodeMaintenance(nodeState)
 	if err != nil {
@@ -236,15 +236,15 @@ func validateNodeMaintenance(nodeState *NodeUpgradeState) (*maintenancev1alpha1.
 	return nm, nil
 }
 
-// NewRequestorUpgradeManagerImpl creates a new instance of (requestor) RequestorUpgradeManagerImpl
-func NewRequestorUpgradeManagerImpl(
+// NewRequestorNodeStateManagerImpl creates a new instance of (requestor) RequestorNodeStateManagerImpl
+func NewRequestorNodeStateManagerImpl(
 	common *CommonUpgradeManagerImpl,
 	opts RequestorOptions) (ProcessNodeStateManager, error) {
 	if !opts.UseMaintenanceOperator {
 		common.Log.V(consts.LogLevelInfo).Info("node maintenance upgrade mode is disabled")
 		return nil, ErrNodeMaintenanceUpgradeDisabled
 	}
-	manager := &RequestorUpgradeManagerImpl{
+	manager := &RequestorNodeStateManagerImpl{
 		opts:                     opts,
 		CommonUpgradeManagerImpl: common,
 	}
@@ -254,7 +254,7 @@ func NewRequestorUpgradeManagerImpl(
 
 // ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
 // until the limit on max parallel upgrades is reached.
-func (m *RequestorUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
+func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeRequiredNodes")
@@ -302,7 +302,7 @@ func (m *RequestorUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 // by adding UpgradeStatePodRestartRequired under existing UpgradeStatePodRestartRequired nodes list.
 // the motivation is later to replace ProcessPodRestartNodes to a generic post node operation
 // while using maintenance operator (e.g. post-maintenance-required)
-func (m *RequestorUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
+func (m *RequestorNodeStateManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
 	currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessNodeMaintenanceRequiredNodes")
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateNodeMaintenanceRequired] {
@@ -340,7 +340,7 @@ func (m *RequestorUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx co
 	return nil
 }
 
-func (m *RequestorUpgradeManagerImpl) ProcessUncordonRequiredNodes(
+func (m *RequestorNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 

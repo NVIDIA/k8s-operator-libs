@@ -34,19 +34,13 @@ type CommonUpgradeStateManager interface {
 	GetUpgradesFailed(currentState *ClusterUpgradeState) int
 	// GetUpgradesPending returns count of nodes on which are marked for upgrades and upgrade is pending
 	GetUpgradesPending(currentState *ClusterUpgradeState) int
-	// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion'
-	// state and pass a custom PodDeletionFilter to use
-	WithPodDeletionEnabled(filter PodDeletionFilter) CommonUpgradeStateManager
-	// WithValidationEnabled provides an option to enable the optional 'validation' state
-	// and pass a podSelector to specify which pods are performing the validation
-	WithValidationEnabled(podSelector string) CommonUpgradeStateManager
 	// IsPodDeletionEnabled returns true if 'pod-deletion' state is enabled
 	IsPodDeletionEnabled() bool
 	// IsValidationEnabled returns true if 'validation' state is enabled
 	IsValidationEnabled() bool
 }
 
-// ProcessNodeStateManager interface is used for abstracting both upgrade modes: inplace,
+// ProcessNodeStateManager interface is used for abstracting both upgrade modes: in-place,
 // requestor (e.g. maintenance OP)
 // Similar node states are used in both modes, while changes are introduced within ApplyState Process<state>
 // methods to support both modes logic
@@ -85,6 +79,8 @@ func NewClusterUpgradeState() ClusterUpgradeState {
 	return ClusterUpgradeState{NodeStates: make(map[string][]*NodeUpgradeState)}
 }
 
+// CommonUpgradeManagerImpl is an implementation of the CommonUpgradeStateManager interface.
+// It facilitates common logic implementation for both upgrade modes: in-place and requestor (e.g. maintenance OP).
 type CommonUpgradeManagerImpl struct {
 	Log           logr.Logger
 	K8sClient     client.Client
@@ -134,31 +130,6 @@ func NewCommonUpgradeStateManager(
 	}
 
 	return &commonUpgrade, nil
-}
-
-// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom
-// PodDeletionFilter to use
-func (m *CommonUpgradeManagerImpl) WithPodDeletionEnabled(filter PodDeletionFilter) CommonUpgradeStateManager {
-	if filter == nil {
-		m.Log.V(consts.LogLevelWarning).Info("Cannot enable PodDeletion state as PodDeletionFilter is nil")
-		return m
-	}
-	m.PodManager = NewPodManager(m.K8sInterface, m.NodeUpgradeStateProvider, m.Log, filter, m.EventRecorder)
-	m.podDeletionStateEnabled = true
-	return m
-}
-
-// WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify
-// which pods are performing the validation
-func (m *CommonUpgradeManagerImpl) WithValidationEnabled(podSelector string) CommonUpgradeStateManager {
-	if podSelector == "" {
-		m.Log.V(consts.LogLevelWarning).Info("Cannot enable Validation state as podSelector is empty")
-		return m
-	}
-	m.ValidationManager = NewValidationManager(m.K8sInterface, m.Log, m.EventRecorder, m.NodeUpgradeStateProvider,
-		podSelector)
-	m.validationStateEnabled = true
-	return m
 }
 
 // IsPodDeletionEnabled returns true if 'pod-deletion' state is enabled

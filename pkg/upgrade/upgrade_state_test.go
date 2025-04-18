@@ -642,7 +642,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			}
 
 			filter := func(pod corev1.Pod) bool { return false }
-			commonStateManager := stateManager.CommonUpgradeManagerImpl.WithPodDeletionEnabled(filter)
+			commonStateManager := stateManager.WithPodDeletionEnabled(filter)
 			Expect(commonStateManager.IsPodDeletionEnabled()).To(Equal(true))
 
 			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policyWithNoDrainSpec)).To(Succeed())
@@ -1038,7 +1038,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			policy := &v1alpha1.DriverUpgradePolicySpec{
 				AutoUpgrade: true,
 			}
-			commonStateManager := stateManager.CommonUpgradeManagerImpl.WithValidationEnabled("app=validator")
+			commonStateManager := stateManager.WithValidationEnabled("app=validator")
 			Expect(commonStateManager.IsValidationEnabled()).To(Equal(true))
 			// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
@@ -1073,7 +1073,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				AutoUpgrade: true,
 			}
 
-			commonStateManager := stateManager.CommonUpgradeManagerImpl.WithValidationEnabled("app=validator")
+			commonStateManager := stateManager.WithValidationEnabled("app=validator")
 			Expect(commonStateManager.IsValidationEnabled()).To(Equal(true))
 			// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
@@ -1110,7 +1110,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				AutoUpgrade: true,
 			}
 
-			commonStateManager := stateManager.CommonUpgradeManagerImpl.WithValidationEnabled("app=validator")
+			commonStateManager := stateManager.WithValidationEnabled("app=validator")
 			Expect(commonStateManager.IsValidationEnabled()).To(Equal(true))
 			// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
@@ -1626,7 +1626,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			AutoUpgrade: true,
 		}
 
-		commonStateManager := stateManager.CommonUpgradeManagerImpl.WithValidationEnabled("app=validator")
+		commonStateManager := stateManager.WithValidationEnabled("app=validator")
 		Expect(commonStateManager.IsValidationEnabled()).To(Equal(true))
 		// do not mock NodeUpgradeStateProvider as it is used during ProcessUpgradeValidationRequiredNodes()
 		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)

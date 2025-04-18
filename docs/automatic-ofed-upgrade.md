@@ -90,14 +90,14 @@ _NOTE: the diagram is outdated_
 ![State change diagram](images/driver-upgrade-state-diagram.png)
 
 #### Upgrade modes
-##### inplace
-inplace (legacy) mode is incorporating full driver upgrade lifecycle, including nodes operations e.g. cordon, pod eviction, drain, uncordon.
+##### in-place
+in-place (legacy) mode is incorporating full driver upgrade lifecycle, including nodes operations e.g. cordon, pod eviction, drain, uncordon.
 It also maintains an internal scheduler for performing above node operations, according
 to provided `maxParallelUpgrades` under `UpgradePolicy`.
 
 ##### requestor
-New `requestor` upgrade mode is utilizing [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance k8s API objects, to initiate DOCA driver upgrade process.
-Essentially, it will retire current upgrade controller (inplace mode) from performing the following node operations: cordon, wait for pods completion, drain, uncordon.
+The new `requestor` upgrade mode uses the [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance k8s API objects, to initiate the DOCA driver upgrade process.
+Essentially, it will retire current upgrade controller (in-place mode) from performing the following node operations: cordon, wait for pods completion, drain, uncordon.
 To enable requestor mode, the following environment variable should be enabled `MAINTENANCE_OPERATOR_ENABLED=true`.
 requestor also exposes controller-runtime predicate functions under `pkg/upgrade/requestor/predicate.go`, embed in your
 controller manager watchers:

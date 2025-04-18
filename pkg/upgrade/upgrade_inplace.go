@@ -25,15 +25,15 @@ import (
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
-// InplaceUpgradeManagerImpl contains concrete implementations for distinct inplace upgrade mode
-type InplaceUpgradeManagerImpl struct {
+// InplaceNodeStateManagerImpl contains concrete implementations for distinct inplace upgrade mode
+type InplaceNodeStateManagerImpl struct {
 	*CommonUpgradeManagerImpl
 }
 
-// NewClusterUpgradeStateManager creates a new instance of InplaceUpgradeManagerImpl
-func NewInplaceUpgradeManagerImpl(commonmanager *CommonUpgradeManagerImpl) (ProcessNodeStateManager,
+// NewClusterUpgradeStateManager creates a new instance of InplaceNodeStateManagerImpl
+func NewInplaceNodeStateManagerImpl(commonmanager *CommonUpgradeManagerImpl) (ProcessNodeStateManager,
 	error) {
-	manager := &InplaceUpgradeManagerImpl{
+	manager := &InplaceNodeStateManagerImpl{
 		CommonUpgradeManagerImpl: commonmanager,
 	}
 	return manager, nil
@@ -41,7 +41,7 @@ func NewInplaceUpgradeManagerImpl(commonmanager *CommonUpgradeManagerImpl) (Proc
 
 // ProcessUpgradeRequiredNodes processes UpgradeStateUpgradeRequired nodes and moves them to UpgradeStateCordonRequired
 // until the limit on max parallel upgrades is reached.
-func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
+func (m *InplaceNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState,
 	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) error {
 	var err error
@@ -111,15 +111,17 @@ func (m *InplaceUpgradeManagerImpl) ProcessUpgradeRequiredNodes(
 	return nil
 }
 
-func (m *InplaceUpgradeManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
+// ProcessNodeMaintenanceRequiredNodes is a used to satisfy ProcessNodeStateManager interface
+func (m *InplaceNodeStateManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx context.Context,
 	currentClusterState *ClusterUpgradeState) error {
-	// TODO: in future versions we'll remove 'pod-restart-required' and use 'post-maintenance-required' instead
-	return m.ProcessPodRestartNodes(ctx, currentClusterState)
+	_ = ctx
+	_ = currentClusterState
+	return nil
 }
 
 // ProcessUncordonRequiredNodes processes UpgradeStateUncordonRequired nodes,
 // uncordons them and moves them to UpgradeStateDone state
-func (m *InplaceUpgradeManagerImpl) ProcessUncordonRequiredNodes(
+func (m *InplaceNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 

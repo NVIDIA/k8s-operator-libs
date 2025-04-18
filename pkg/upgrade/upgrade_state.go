@@ -31,9 +31,15 @@ import (
 	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
-// ExtendedUpgradeStateManager interface purpose is to decouple ApplyState implementation from base package
-// since upgrade pkg is a high level abstaction referencing inplace/requestor (maintenance OP) packages
-type ExtendedUpgradeStateManager interface {
+// ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
+type ClusterUpgradeStateManager interface {
+	CommonUpgradeStateManager
+	// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion'
+	// state and pass a custom PodDeletionFilter to use
+	WithPodDeletionEnabled(filter PodDeletionFilter) ClusterUpgradeStateManager
+	// WithValidationEnabled provides an option to enable the optional 'validation' state
+	// and pass a podSelector to specify which pods are performing the validation
+	WithValidationEnabled(podSelector string) ClusterUpgradeStateManager
 	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 	BuildState(ctx context.Context, namespace string,
 		driverLabels map[string]string) (*ClusterUpgradeState, error)
@@ -44,12 +50,6 @@ type ExtendedUpgradeStateManager interface {
 	// ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 	ApplyState(ctx context.Context,
 		currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error)
-}
-
-// ClusterUpgradeStateManager is an interface for performing cluster upgrades of driver containers
-type ClusterUpgradeStateManager interface {
-	ExtendedUpgradeStateManager
-	CommonUpgradeStateManager
 }
 
 // ClusterUpgradeStateManagerImpl serves as a state machine for the ClusterUpgradeState
@@ -71,12 +71,12 @@ func NewClusterUpgradeStateManager(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
-	request, err := NewRequestorUpgradeManagerImpl(commonmanager, opts.Requestor)
+	request, err := NewRequestorNodeStateManagerImpl(commonmanager, opts.Requestor)
 	if err != nil && err != ErrNodeMaintenanceUpgradeDisabled {
 		return nil, fmt.Errorf("failed to create requestor upgrade state manager. %v", err)
 	}
 
-	inplace, err := NewInplaceUpgradeManagerImpl(commonmanager)
+	inplace, err := NewInplaceNodeStateManagerImpl(commonmanager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inplace upgrade state manager. %v", err)
 	}
@@ -150,7 +150,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
 			continue
 		}
-		nodeState, err := m.BuildNodeUpgradeState(ctx, pod, ownerDaemonSet)
+		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod)
 			return nil, err
@@ -161,34 +161,6 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	}
 
 	return &upgradeState, nil
-}
-
-// BuildNodeUpgradeState creates a mapping between a node,
-// the driver POD running on them and the daemon set, controlling this pod
-func (m *ClusterUpgradeStateManagerImpl) BuildNodeUpgradeState(
-	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
-	var nm client.Object
-	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
-	}
-
-	if m.opts.Requestor.UseMaintenanceOperator {
-		rum, ok := m.requestor.(*RequestorUpgradeManagerImpl)
-		if !ok {
-			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
-		}
-		nm, err = rum.GetNodeMaintenanceObj(ctx, node.Name)
-		if err != nil {
-			return nil, fmt.Errorf("failed while trying to fetch nodeMaintennace obj: %v", err)
-		}
-	}
-
-	upgradeStateLabel := GetUpgradeStateLabelKey()
-	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
-		"node", node.Name, "state", node.Labels[upgradeStateLabel])
-
-	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -274,9 +246,17 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return err
 	}
 
+	// TODO: in future versions we'll remove 'pod-restart-required' and use 'post-maintenance-required' instead
+	// to indicate a general post maintennace node operations (e.g. restart driver pods, node reboot etc.)
 	err = m.ProcessNodeMaintenanceRequiredNodesWrapper(ctx, currentState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed for post maintenance")
+		return err
+	}
+
+	err = m.ProcessPodRestartNodes(ctx, currentState)
+	if err != nil {
+		m.Log.V(consts.LogLevelError).Error(err, "Failed for 'pod-restart-required' state")
 		return err
 	}
 
@@ -324,7 +304,6 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessNodeMaintenanceRequiredNodesWrap
 			return err
 		}
 	}
-	err = m.inplace.ProcessNodeMaintenanceRequiredNodes(ctx, currentState)
 
 	return err
 }
@@ -343,4 +322,57 @@ func (m *ClusterUpgradeStateManagerImpl) ProcessUncordonRequiredNodesWrapper(ctx
 		err = m.requestor.ProcessUncordonRequiredNodes(ctx, currentState)
 	}
 	return err
+}
+
+// WithPodDeletionEnabled provides an option to enable the optional 'pod-deletion' state and pass a custom
+// PodDeletionFilter to use
+func (m *ClusterUpgradeStateManagerImpl) WithPodDeletionEnabled(filter PodDeletionFilter) ClusterUpgradeStateManager {
+	if filter == nil {
+		m.Log.V(consts.LogLevelWarning).Info("Cannot enable PodDeletion state as PodDeletionFilter is nil")
+		return m
+	}
+	m.PodManager = NewPodManager(m.K8sInterface, m.NodeUpgradeStateProvider, m.Log, filter, m.EventRecorder)
+	m.podDeletionStateEnabled = true
+	return m
+}
+
+// WithValidationEnabled provides an option to enable the optional 'validation' state and pass a podSelector to specify
+// which pods are performing the validation
+func (m *ClusterUpgradeStateManagerImpl) WithValidationEnabled(podSelector string) ClusterUpgradeStateManager {
+	if podSelector == "" {
+		m.Log.V(consts.LogLevelWarning).Info("Cannot enable Validation state as podSelector is empty")
+		return m
+	}
+	m.ValidationManager = NewValidationManager(m.K8sInterface, m.Log, m.EventRecorder, m.NodeUpgradeStateProvider,
+		podSelector)
+	m.validationStateEnabled = true
+	return m
+}
+
+// buildNodeUpgradeState creates a mapping between a node,
+// the driver POD running on them and the daemon set, controlling this pod
+func (m *ClusterUpgradeStateManagerImpl) buildNodeUpgradeState(
+	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
+	var nm client.Object
+	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
+	}
+
+	if m.opts.Requestor.UseMaintenanceOperator {
+		rum, ok := m.requestor.(*RequestorNodeStateManagerImpl)
+		if !ok {
+			return nil, fmt.Errorf("failed to cast rquestor upgrade manager: %v", err)
+		}
+		nm, err = rum.GetNodeMaintenanceObj(ctx, node.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed while trying to fetch nodeMaintennace obj: %v", err)
+		}
+	}
+
+	upgradeStateLabel := GetUpgradeStateLabelKey()
+	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
+		"node", node.Name, "state", node.Labels[upgradeStateLabel])
+
+	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil
 }
