@@ -19,21 +19,22 @@ package upgrade_test
 import (
 	"context"
 	"math/rand"
+	"path/filepath"
 	"testing"
 
+	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -49,20 +50,21 @@ import (
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
-var k8sConfig *rest.Config
-var k8sClient client.Client
-var k8sInterface kubernetes.Interface
-var testEnv *envtest.Environment
-var log logr.Logger
-var nodeUpgradeStateProvider mocks.NodeUpgradeStateProvider
-var drainManager mocks.DrainManager
-var podManager mocks.PodManager
-var cordonManager mocks.CordonManager
-var validationManager mocks.ValidationManager
-var eventRecorder = record.NewFakeRecorder(100)
-
-var createdObjects []client.Object
+var (
+	k8sConfig                *rest.Config
+	k8sClient                client.Client
+	k8sInterface             kubernetes.Interface
+	testEnv                  *envtest.Environment
+	log                      logr.Logger
+	nodeUpgradeStateProvider mocks.NodeUpgradeStateProvider
+	drainManager             mocks.DrainManager
+	podManager               mocks.PodManager
+	cordonManager            mocks.CordonManager
+	validationManager        mocks.ValidationManager
+	eventRecorder            = record.NewFakeRecorder(100)
+	createdObjects           []client.Object
+	testCtx                  context.Context
+)
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -73,17 +75,24 @@ func TestAPIs(t *testing.T) {
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
+	// set up context
+	testCtx = ctrl.SetupSignalHandler()
 	By("bootstrapping test environment")
-	testEnv = &envtest.Environment{}
+	testEnv = &envtest.Environment{
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "hack", "crd", "bases")},
+	}
 
 	var err error
 	k8sConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sConfig).NotTo(BeNil())
 
+	err = maintenancev1alpha1.AddToScheme(upgrade.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+	k8sClient, err = client.New(k8sConfig, client.Options{Scheme: upgrade.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
@@ -142,12 +151,12 @@ var _ = BeforeSuite(func() {
 		On("GetPodDeletionFilter").
 		Return(nil)
 	podManager.
-		On("GetPodControllerRevisionHash", mock.Anything, mock.Anything).
+		On("GetPodControllerRevisionHash", mock.Anything).
 		Return(
-			func(ctx context.Context, pod *corev1.Pod) string {
+			func(pod *corev1.Pod) string {
 				return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
 			},
-			func(ctx context.Context, pod *corev1.Pod) error {
+			func(pod *corev1.Pod) error {
 				return nil
 			},
 		)
@@ -181,9 +190,9 @@ var _ = AfterEach(func() {
 	for i := range createdObjects {
 		r := createdObjects[i]
 		key := client.ObjectKeyFromObject(r)
-		err := k8sClient.Get(context.TODO(), key, r)
-		if err == nil {
-			Expect(k8sClient.Delete(context.TODO(), r)).To(Succeed())
+		err := k8sClient.Delete(context.TODO(), r)
+		if err != nil && !errors.IsNotFound(err) {
+			Expect(err).NotTo(HaveOccurred())
 		}
 		// drain events from FakeRecorder
 		for len(eventRecorder.Events) > 0 {
@@ -243,6 +252,47 @@ func (n Node) Create() *corev1.Node {
 	Expect(err).NotTo(HaveOccurred())
 	createdObjects = append(createdObjects, node)
 	return node
+}
+
+type NodeMaintenance struct {
+	*maintenancev1alpha1.NodeMaintenance
+}
+
+func NewNodeMaintenance(name, namespace string) NodeMaintenance {
+	nm := &maintenancev1alpha1.NodeMaintenance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
+			NodeName:    name,
+			RequestorID: "dummy-requestor.com",
+		},
+	}
+
+	return NodeMaintenance{nm}
+}
+
+func (m NodeMaintenance) WithConditions(condition v1.Condition) NodeMaintenance {
+	conditions := []v1.Condition{}
+	conditions = append(conditions, condition)
+	status := maintenancev1alpha1.NodeMaintenanceStatus{
+		Conditions: conditions,
+	}
+	m.Status = status
+	err := k8sClient.Status().Update(context.TODO(), m)
+	Expect(err).NotTo(HaveOccurred())
+
+	return m
+}
+
+func (m NodeMaintenance) Create() *maintenancev1alpha1.NodeMaintenance {
+	nm := m.NodeMaintenance
+	err := k8sClient.Create(context.TODO(), nm)
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, nm)
+
+	return nm
 }
 
 type DaemonSet struct {
@@ -379,77 +429,10 @@ func createNamespace(name string) *corev1.Namespace {
 	return namespace
 }
 
-func createPod(name, namespace string, labels map[string]string, nodeName string) *corev1.Pod {
-	gracePeriodSeconds := int64(0)
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels:    labels,
-		},
-		Spec: corev1.PodSpec{
-			TerminationGracePeriodSeconds: &gracePeriodSeconds,
-			NodeName:                      nodeName,
-			Containers: []corev1.Container{
-				{
-					Name:  "test-container",
-					Image: "test-image",
-				},
-			},
-		},
-	}
-	err := k8sClient.Create(context.TODO(), pod)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, pod)
-	return pod
-}
-
 func updatePodStatus(pod *corev1.Pod) error {
 	err := k8sClient.Status().Update(context.TODO(), pod)
 	Expect(err).NotTo(HaveOccurred())
 	return err
-}
-
-func updatePod(pod *corev1.Pod) error {
-	err := k8sClient.Update(context.TODO(), pod)
-	Expect(err).NotTo(HaveOccurred())
-	return err
-}
-
-func createJob(name string, namespace string, labels map[string]string) *batchv1.Job {
-	var backOffLimit int32 = 0
-	manualSelector := true
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels:    labels,
-		},
-		Spec: batchv1.JobSpec{
-			ManualSelector: &manualSelector,
-			Selector:       &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []v1.Container{
-						{
-							Name:    name,
-							Image:   "test-image",
-							Command: []string{"test-command"},
-						},
-					},
-					RestartPolicy: corev1.RestartPolicyNever,
-				},
-			},
-			BackoffLimit: &backOffLimit,
-		},
-	}
-	err := k8sClient.Create(context.TODO(), job)
-	Expect(err).NotTo(HaveOccurred())
-	createdObjects = append(createdObjects, job)
-	return job
 }
 
 func createNode(name string) *corev1.Node {
@@ -469,16 +452,6 @@ func getNode(name string) *corev1.Node {
 	return node
 }
 
-func updateNode(node *corev1.Node) error {
-	err := k8sClient.Update(context.TODO(), node)
-	Expect(err).NotTo(HaveOccurred())
-	return err
-}
-
-func deleteObj(obj client.Object) {
-	Expect(k8sClient.Delete(context.TODO(), obj)).To(BeNil())
-}
-
 func getNodeUpgradeState(node *corev1.Node) string {
 	return node.Labels[upgrade.GetUpgradeStateLabelKey()]
 }
@@ -486,6 +459,10 @@ func getNodeUpgradeState(node *corev1.Node) string {
 func isUnschedulableAnnotationPresent(node *corev1.Node) bool {
 	_, ok := node.Annotations[upgrade.GetUpgradeInitialStateAnnotationKey()]
 	return ok
+}
+
+func deleteObj(obj client.Object) {
+	Expect(k8sClient.Delete(context.TODO(), obj)).To(BeNil())
 }
 
 func isWaitForCompletionAnnotationPresent(node *corev1.Node) bool {

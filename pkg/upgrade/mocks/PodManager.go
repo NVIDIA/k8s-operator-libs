@@ -54,19 +54,19 @@ func (_m *PodManager) GetDaemonsetControllerRevisionHash(ctx context.Context, da
 }
 
 // GetPodControllerRevisionHash provides a mock function with given fields: ctx, pod
-func (_m *PodManager) GetPodControllerRevisionHash(ctx context.Context, pod *corev1.Pod) (string, error) {
-	ret := _m.Called(ctx, pod)
+func (_m *PodManager) GetPodControllerRevisionHash(pod *corev1.Pod) (string, error) {
+	ret := _m.Called(pod)
 
 	var r0 string
-	if rf, ok := ret.Get(0).(func(context.Context, *corev1.Pod) string); ok {
-		r0 = rf(ctx, pod)
+	if rf, ok := ret.Get(0).(func(*corev1.Pod) string); ok {
+		r0 = rf(pod)
 	} else {
 		r0 = ret.Get(0).(string)
 	}
 
 	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, *corev1.Pod) error); ok {
-		r1 = rf(ctx, pod)
+	if rf, ok := ret.Get(1).(func(*corev1.Pod) error); ok {
+		r1 = rf(pod)
 	} else {
 		r1 = ret.Error(1)
 	}

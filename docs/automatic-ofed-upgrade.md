@@ -78,6 +78,9 @@ or when unblock of the driver loading is required (safe driver load)
 * `validation-required` is set when validation of the new driver deployed on the node is required before moving to `uncordon-required`
 * `uncordon-required` is set when driver pod on the node is up-to-date and has "Ready" status
 * `upgrade-done` is set when driver pod is up to date and running on the node, the node is schedulable
+* `node-maintenance-required` is set for requestor mode upgrade (e.g.`MAINTENANCE_OPERATOR_ENABLED=true`) post `upgrade-required` state. Essentially it will create a matching nodeMaintenance object for maintenance operator to perform its node operations.
+* `post-maintenance-required` is set when node maintenance status condition is `ready`, meaning maintenance operator has completed 
+cordoning and draining related node(s), and now requestor (client) needs to perform post operations (e.g restart driver's pod, restart node, etc.)
 * `upgrade-failed` is set when there are any failures during the driver upgrade, see [Troubleshooting](#node-is-in-drain-failed-state) section for more details.
 
 #### State change diagram
@@ -85,6 +88,31 @@ or when unblock of the driver loading is required (safe driver load)
 _NOTE: the diagram is outdated_
 
 ![State change diagram](images/driver-upgrade-state-diagram.png)
+
+#### Upgrade modes
+##### in-place
+in-place (legacy) mode is incorporating full driver upgrade lifecycle, including nodes operations e.g. cordon, pod eviction, drain, uncordon.
+It also maintains an internal scheduler for performing above node operations, according
+to provided `maxParallelUpgrades` under `UpgradePolicy`.
+
+##### requestor
+The new `requestor` upgrade mode uses the [NVIDIA maintenance operator](https://github.com/Mellanox/maintenance-operator) nodeMaintenance k8s API objects, to initiate the DOCA driver upgrade process.
+Essentially, it will retire current upgrade controller (in-place mode) from performing the following node operations: cordon, wait for pods completion, drain, uncordon.
+To enable requestor mode, the following environment variable should be enabled `MAINTENANCE_OPERATOR_ENABLED=true`.
+requestor also exposes controller-runtime predicate functions under `pkg/upgrade/requestor/predicate.go`, embed in your
+controller manager watchers:
+```
+  ctrl.NewControllerManagedBy(mgr).For(*).
+  ...
+  Watches(&maintenancev1alpha1.NodeMaintenance{}, createUpdateDeleteEnqueue,
+			builder.WithPredicates(requestor.NewConditionChangedPredicate(setupLog,
+		requestorOpts.MaintenanceOPRequestorID))).
+```
+* Make sure that NVIDIA maintenance-operator pod is running.
+
+> __Note__: Initially `k8s-operator-libs` will support both `requestor`, `inplace` (legacy) modes simultaneously.
+> Meaning in case node undergoes upgrade prior to enabling `requestor` mode, node will continue `inplace` upgrade mode. Only after `requestor` mode is set, and upgrade
+> controller has set nodes state to be upgrade-required, only then new requestor mode will take place.
 
 ### Troubleshooting
 #### Node is in `upgrade-failed` state
