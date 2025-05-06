@@ -1332,7 +1332,9 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			nm := &maintenancev1alpha1.NodeMaintenance{}
 			err := k8sClient.Get(testCtx, client.ObjectKey{Name: item.Name, Namespace: namespace}, nm)
 			Expect(err).NotTo(HaveOccurred())
-
+			// validate requestor's opts
+			Expect(nm.Spec.RequestorID).To(Equal(opts.Requestor.MaintenanceOPRequestorID))
+			Expect(nm.Name).To(Equal(opts.Requestor.NodeMaintenanceNamePrefix + "-" + nm.Spec.NodeName))
 			nm.Finalizers = append(nm.Finalizers, maintenancev1alpha1.MaintenanceFinalizerName)
 			err = k8sClient.Update(testCtx, nm)
 			Expect(err).NotTo(HaveOccurred())
@@ -1696,11 +1698,13 @@ func withUpgradeRequestorMode(testCtx context.Context, namespace string) context
 	os.Setenv("MAINTENANCE_OPERATOR_ENABLED", "true")
 	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE", namespace)
 	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_ID", "network.opeator.com")
+	os.Setenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX", "test")
+
 	_, cancelFn := context.WithCancel(testCtx)
-	opts := upgrade.GetRequestorOptsFromEnvs()
+	opts.Requestor = upgrade.GetRequestorOptsFromEnvs()
 
 	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig,
-		eventRecorder, upgrade.StateOptions{Requestor: opts})
+		eventRecorder, upgrade.StateOptions{Requestor: opts.Requestor})
 	Expect(err).NotTo(HaveOccurred())
 
 	stateManager, _ = stateManagerInterface.(*upgrade.ClusterUpgradeStateManagerImpl)

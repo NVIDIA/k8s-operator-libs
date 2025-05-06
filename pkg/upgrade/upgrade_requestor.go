@@ -71,6 +71,9 @@ type RequestorOptions struct {
 	// MaintenanceOPRequestorNS is a user defined namespace which nodeMaintennace
 	// objects will be created
 	MaintenanceOPRequestorNS string
+	// NodeMaintenanceNamePrefix is a prefix for nodeMaintenance object name
+	// e.g. <prefix>-<node-name> to distinguish between different requestors if desired
+	NodeMaintenanceNamePrefix string
 	// MaintenanceOPPodEvictionFilter is a filter to be used for pods eviction
 	// by maintenance operator
 	MaintenanceOPPodEvictionFilter []maintenancev1alpha1.PodEvictionFiterEntry
@@ -161,7 +164,7 @@ func SetDefaultNodeMaintenance(opts RequestorOptions,
 
 func (m *RequestorNodeStateManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
 	nm := defaultNodeMaintenance.DeepCopy()
-	nm.Name = nodeName
+	nm.Name = m.opts.NodeMaintenanceNamePrefix + "-" + nodeName
 	nm.Spec.NodeName = nodeName
 
 	return nm
@@ -431,6 +434,11 @@ func GetRequestorOptsFromEnvs() RequestorOptions {
 		opts.MaintenanceOPRequestorID = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID")
 	} else {
 		opts.MaintenanceOPRequestorID = "nvidia.operator.com"
+	}
+	if os.Getenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX") != "" {
+		opts.NodeMaintenanceNamePrefix = os.Getenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX")
+	} else {
+		opts.NodeMaintenanceNamePrefix = "nvidia-operator"
 	}
 	return opts
 }
