@@ -41,7 +41,7 @@ GOLANGCILINT ?= $(TOOLSDIR)/golangci-lint
 CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
 GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
 SETUP_ENVTEST ?= $(TOOLSDIR)/setup-envtest
-GOLANGCILINT_VERSION ?= v1.62.2
+GOLANGCILINT_VERSION ?= v2.1.6
 CONTROLLER_GEN_VERSION ?= v0.16.5
 GCOV2LCOV_VERSION ?= v1.1.1
 SETUP_ENVTEST_RELEASE ?= release-0.19
@@ -84,7 +84,7 @@ controller-gen:	## Download controller-gen locally if necessary
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION))
 
 golangci-lint: ## Download golangci-lint locally if necessary.
-	$(call go-install-tool,$(GOLANGCILINT),github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCILINT_VERSION))
+	$(call go-install-tool,$(GOLANGCILINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCILINT_VERSION))
 
 gcov2lcov: ## Download gcov2lcov locally if necessary.
 	$(call go-install-tool,$(GCOV2LCOV),github.com/jandelgado/gcov2lcov@$(GCOV2LCOV_VERSION))

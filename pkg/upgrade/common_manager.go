@@ -221,7 +221,7 @@ func (m *CommonUpgradeManagerImpl) GetOrphanedPods(pods []corev1.Pod) []corev1.P
 }
 
 func IsOrphanedPod(pod *corev1.Pod) bool {
-	return pod.OwnerReferences == nil || len(pod.OwnerReferences) < 1
+	return len(pod.OwnerReferences) < 1
 }
 
 // ProcessDoneOrUnknownNodes iterates over UpgradeStateDone or UpgradeStateUnknown nodes and determines
@@ -469,7 +469,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 			// Pods should only be scheduled for restart if they are not terminating or restarting already
 			// To determinate terminating state we need to check for deletion timestamp which will be set
 			// once pod termination process started
-			if nodeState.DriverPod.ObjectMeta.DeletionTimestamp.IsZero() {
+			if nodeState.DriverPod.DeletionTimestamp.IsZero() {
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
