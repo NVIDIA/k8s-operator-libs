@@ -164,7 +164,7 @@ func SetDefaultNodeMaintenance(opts RequestorOptions,
 
 func (m *RequestorNodeStateManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
 	nm := defaultNodeMaintenance.DeepCopy()
-	nm.Name = m.opts.NodeMaintenanceNamePrefix + "-" + nodeName
+	nm.Name = m.getNodeMaintenanceName(nodeName)
 	nm.Spec.NodeName = nodeName
 
 	return nm
@@ -188,12 +188,12 @@ func (m *RequestorNodeStateManagerImpl) CreateNodeMaintenance(ctx context.Contex
 	return nil
 }
 
-// GetNodeMaintenanceObj creates nodeMaintenance obj for designated node upgrade-required state
+// GetNodeMaintenanceObj checks for existing nodeMaintenance obj
 func (m *RequestorNodeStateManagerImpl) GetNodeMaintenanceObj(ctx context.Context,
 	nodeName string) (client.Object, error) {
 	nm := &maintenancev1alpha1.NodeMaintenance{}
 	err := m.K8sClient.Get(ctx, types.NamespacedName{
-		Name: nodeName, Namespace: m.opts.MaintenanceOPRequestorNS},
+		Name: m.getNodeMaintenanceName(nodeName), Namespace: m.opts.MaintenanceOPRequestorNS},
 		nm, &client.GetOptions{})
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
@@ -214,7 +214,7 @@ func (m *RequestorNodeStateManagerImpl) DeleteNodeMaintenance(ctx context.Contex
 		return err
 	}
 	nm := &maintenancev1alpha1.NodeMaintenance{}
-	err = m.K8sClient.Get(ctx, types.NamespacedName{Name: nodeState.Node.Name,
+	err = m.K8sClient.Get(ctx, types.NamespacedName{Name: m.getNodeMaintenanceName(nodeState.Node.Name),
 		Namespace: m.opts.MaintenanceOPRequestorNS},
 		nm, &client.GetOptions{})
 	if err != nil {
@@ -386,6 +386,11 @@ func (m *RequestorNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 		}
 	}
 	return nil
+}
+
+// getNodeMaintenanceName returns expected name of the nodeMaintenance object
+func (m *RequestorNodeStateManagerImpl) getNodeMaintenanceName(nodeName string) string {
+	return fmt.Sprintf("%s-%s", m.opts.NodeMaintenanceNamePrefix, nodeName)
 }
 
 // convertV1Alpha1ToMaintenance explicitly converts v1alpha1.DriverUpgradePolicySpec
