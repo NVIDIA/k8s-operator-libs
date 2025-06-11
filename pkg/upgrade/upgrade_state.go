@@ -67,7 +67,8 @@ func NewClusterUpgradeStateManager(
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
+	shouldSkipFunc := setShouldSkipUpgradeDoneFunc(opts.Requestor)
+	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, Scheme, shouldSkipFunc, eventRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}

@@ -130,6 +130,10 @@ func (m *InplaceNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 		if nodeState.NodeMaintenance != nil {
 			continue
 		}
+		// check if if node upgrade is handled by requestor mode, if so node uncordon will be performed by requestor flow
+		if _, exists := nodeState.Node.Annotations[GetUpgradeRequestorModeAnnotationKey()]; exists {
+			continue
+		}
 		err := m.CordonManager.Uncordon(ctx, nodeState.Node)
 		if err != nil {
 			m.Log.V(consts.LogLevelWarning).Error(
