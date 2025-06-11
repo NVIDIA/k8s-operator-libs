@@ -108,6 +108,21 @@ controller manager watchers:
 			builder.WithPredicates(requestor.NewConditionChangedPredicate(setupLog,
 		requestorOpts.MaintenanceOPRequestorID))).
 ```
+
+The requestor mode supports a `joint-requestor` flow where multiple operators can coordinate node maintenance operations:
+Assumptions:
+1. Cluster admin, which requires requestor joint mode, needs to make sure that all operators, utilizing maintenance OP, use same upgrade policy specs (same drainSpec).
+2. To be able to accommodate both GPU/Network drivers upgrade, `DrainSpec.PodSelector` should be set accordingly (hard-coded). 
+ * podSelector: `nvidia.com/ofed-driver-upgrade-drain.skip!=true,nvidia.com/gpu-driver-upgrade-drain.skip!=true`
+3. No custom `NodeMaintenanceNamePrefix` should be used. Requestor will use `DefaultNodeMaintenanceNamePrefix` as a common prefix for nodeMaintenance name.
+Flow:
+1. Each operator adds its dedicated operator label to the nodeMaintenance object
+2. When a nodeMaintenance object exists, additional operators append their requestorID to the spec.AdditionalRequestors list
+3. During `uncordon-required` completion:
+   - Non-owning operators remove themselves from spec.AdditionalRequestors list using optimistic locking
+   - Each operator removes its dedicated label from the nodeMaintenance object
+4. The owning nodeMaintenance operator handles the actual, client side, deletion of the nodeMaintenance object
+
 * Make sure that NVIDIA maintenance-operator pod is running.
 
 > __Note__: Initially `k8s-operator-libs` will support both `requestor`, `inplace` (legacy) modes simultaneously.

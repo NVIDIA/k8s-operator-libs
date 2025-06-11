@@ -48,6 +48,11 @@ import (
 	// +kubebuilder:scaffold:imports
 )
 
+const (
+	PrimaryTestRequestorID   = "nvidia.operator.com"
+	SecondaryTestRequestorID = "foo.bar.com"
+)
+
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 var (
@@ -64,6 +69,7 @@ var (
 	eventRecorder            = record.NewFakeRecorder(100)
 	createdObjects           []client.Object
 	testCtx                  context.Context
+	testRequestorID          string
 )
 
 func TestAPIs(t *testing.T) {
@@ -261,12 +267,12 @@ type NodeMaintenance struct {
 func NewNodeMaintenance(name, namespace string) NodeMaintenance {
 	nm := &maintenancev1alpha1.NodeMaintenance{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      opts.Requestor.NodeMaintenanceNamePrefix + "-" + name,
 			Namespace: namespace,
 		},
 		Spec: maintenancev1alpha1.NodeMaintenanceSpec{
 			NodeName:    name,
-			RequestorID: "dummy-requestor.com",
+			RequestorID: testRequestorID,
 		},
 	}
 
