@@ -107,6 +107,11 @@ func GetUpgradeSkipNodeLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
 }
 
+// GetUpgradeRequestorLabelKey returns nodeMaintenance label used to mark obj as modified by requestor
+func GetUpgradeRequestorLabelKey(requestorID string) string {
+	return fmt.Sprintf(UpgradeRequestorLabelKeyFmt, requestorID)
+}
+
 // GetUpgradeDriverWaitForSafeLoadAnnotationKey returns the key for annotation used to mark node as waiting for driver
 // safe load
 func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {

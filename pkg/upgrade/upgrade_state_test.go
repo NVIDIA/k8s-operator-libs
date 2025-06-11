@@ -65,6 +65,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		stateManager.CordonManager = &cordonManager
 		stateManager.PodManager = &podManager
 		stateManager.ValidationManager = &validationManager
+
+		testRequestorID = PrimaryTestRequestorID
 	})
 
 	AfterEach(func() {
@@ -100,6 +102,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			if len(nms.Items) == 0 {
 				return true
 			}
+			Expect(err).NotTo(HaveOccurred())
 			for _, item := range nms.Items {
 				err = removeFinalizersOrDelete(testCtx, &item)
 				Expect(err).NotTo(HaveOccurred())
@@ -1291,7 +1294,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 	It("UpgradeStateManager should move to 'node-maintenance-required' while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateUpgradeRequired, namespace, nil, false)
@@ -1335,6 +1338,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			// validate requestor's opts
 			Expect(nm.Spec.RequestorID).To(Equal(opts.Requestor.MaintenanceOPRequestorID))
 			Expect(nm.Name).To(Equal(opts.Requestor.NodeMaintenanceNamePrefix + "-" + nm.Spec.NodeName))
+			Expect(nm.Labels).To(HaveKey(upgrade.GetUpgradeRequestorLabelKey(opts.Requestor.MaintenanceOPRequestorID)))
 			nm.Finalizers = append(nm.Finalizers, maintenancev1alpha1.MaintenanceFinalizerName)
 			err = k8sClient.Update(testCtx, nm)
 			Expect(err).NotTo(HaveOccurred())
@@ -1365,9 +1369,128 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
 	})
 
+	It("UpgradeStateManager should move to 'node-maintenance-required' while using upgrade requestor mode"+
+		"and joint requestor flow", func() {
+
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "")
+		defer cancel()
+
+		testRequestorID = SecondaryTestRequestorID
+		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateUpgradeRequired, namespace, nil, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		By("verify generated node-maintenance obj(s)")
+		nms := &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(testCtx, nms)
+			return len(nms.Items) == len(clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired])
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+
+		By("verify node requestor-mode-annotation")
+		Eventually(func() bool {
+			for _, nodeState := range clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] {
+				node := corev1.Node{}
+				nodeKey := client.ObjectKey{
+					Name: nodeState.Node.Name,
+				}
+				if err := k8sClient.Get(testCtx, nodeKey, &node); err != nil {
+					if _, ok := node.Annotations[upgrade.GetUpgradeRequestorModeAnnotationKey()]; !ok {
+						return false
+					}
+				}
+				Expect(node.Annotations[upgrade.GetUpgradeRequestorModeAnnotationKey()]).To(Equal("true"))
+			}
+			return true
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		By("verify modified node maintenance obj(s)")
+		Eventually(func() bool {
+			nms := &maintenancev1alpha1.NodeMaintenanceList{}
+			err := k8sClient.List(testCtx, nms)
+			if err != nil {
+				return false
+			}
+
+			for _, item := range nms.Items {
+				if len(item.Spec.AdditionalRequestors) == 0 {
+					return false
+				}
+				Expect(item.Spec.RequestorID).To(Equal(SecondaryTestRequestorID))
+				Expect(item.Spec.AdditionalRequestors).To(ContainElement(PrimaryTestRequestorID))
+				Expect(item.Labels).To(HaveKey(upgrade.GetUpgradeRequestorLabelKey(PrimaryTestRequestorID)))
+			}
+			return true
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+	})
+	It("UpgradeStateManager should stay on 'node-maintenance-required' while using upgrade requestor mode."+
+		"owning node-maintenance obj while new joint requestor added", func() {
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "")
+		defer cancel()
+
+		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateNodeMaintenanceRequired, namespace, nil, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		nms := &maintenancev1alpha1.NodeMaintenanceList{}
+		err := k8sClient.List(testCtx, nms)
+		Expect(err).NotTo(HaveOccurred())
+		for _, item := range nms.Items {
+			if item.Spec.AdditionalRequestors == nil {
+				item.Spec.AdditionalRequestors = make([]string, 0)
+			}
+			originalNm := item.DeepCopy()
+			item.Spec.AdditionalRequestors = append(item.Spec.AdditionalRequestors, SecondaryTestRequestorID)
+			err := k8sClient.Patch(testCtx, &item, client.MergeFrom(originalNm))
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		By("verify modified node maintenance obj(s)")
+		Eventually(func() bool {
+			nms := &maintenancev1alpha1.NodeMaintenanceList{}
+			err := k8sClient.List(testCtx, nms)
+			if err != nil {
+				return false
+			}
+
+			for _, item := range nms.Items {
+				if len(item.Spec.AdditionalRequestors) == 0 {
+					return false
+				}
+			}
+			return true
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+
+		node := &corev1.Node{}
+		Eventually(func() error {
+			err := k8sClient.Get(testCtx, client.ObjectKey{Name: "node-1", Namespace: namespace}, node)
+			if err != nil {
+				return err
+			}
+			if getNodeUpgradeState(node) != upgrade.UpgradeStateNodeMaintenanceRequired {
+				return fmt.Errorf("missing status condition")
+			}
+			return nil
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+
+	})
+
 	It("UpgradeStateManager should move to 'post-maintenance-required' while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateNodeMaintenanceRequired, namespace,
@@ -1390,7 +1513,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
 
 		nmObj := &maintenancev1alpha1.NodeMaintenance{}
-		err := k8sClient.Get(testCtx, client.ObjectKey{Name: "node-1", Namespace: namespace}, nmObj)
+		err := k8sClient.Get(testCtx, client.ObjectKey{Name: opts.Requestor.NodeMaintenanceNamePrefix + "-node-1",
+			Namespace: namespace}, nmObj)
 		Expect(err).NotTo(HaveOccurred())
 		By("set node-maintenance(s) status to mimic maintenance-operator 'Ready' condition flow")
 		status := maintenancev1alpha1.NodeMaintenanceStatus{
@@ -1408,7 +1532,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 		nm := &maintenancev1alpha1.NodeMaintenance{}
 		Eventually(func() error {
-			err := k8sClient.Get(testCtx, client.ObjectKey{Name: "node-1", Namespace: namespace}, nm)
+			err := k8sClient.Get(testCtx, client.ObjectKey{Name: opts.Requestor.NodeMaintenanceNamePrefix + "-" + "node-1",
+				Namespace: namespace}, nm)
 			if err != nil {
 				return err
 			}
@@ -1439,7 +1564,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	It("UpgradeStateManager should move node to 'upgrade-required' in case nodeMaintenance obj is missing "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateNodeMaintenanceRequired, namespace,
@@ -1482,7 +1607,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	It("UpgradeStateManager continue inplace upgrade logic, move to 'wait-for-jobs-required' "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateCordonRequired, namespace, nil, true)
@@ -1511,7 +1636,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 
 	It("UpgradeStateManager move to 'upgrade-done' using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateUncordonRequired, namespace,
@@ -1523,7 +1648,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			},
 		}
 
-		By("verify node-maintenance obj(s) have been deleted")
+		By("verify node-maintenance obj(s) exists")
 		nms := &maintenancev1alpha1.NodeMaintenanceList{}
 		Eventually(func() bool {
 			k8sClient.List(testCtx, nms)
@@ -1531,6 +1656,16 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
 
 		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		By("verify node-maintenance obj(s) have been deleted")
+		nms = &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(testCtx, nms)
+			return len(nms.Items) == 0
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+		// update new cluster state with deleted node-maintenance obj(s)
+		newClusterState, err := stateManagerInterface.BuildState(testCtx, namespace, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stateManagerInterface.ApplyState(testCtx, newClusterState, policy)).To(Succeed())
 		By("verify node is in 'upgrade-done' state")
 		node := &corev1.Node{}
 		Eventually(func() error {
@@ -1543,13 +1678,86 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			}
 			return nil
 		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+	})
 
+	It("UpgradeStateManager should stay on 'uncordon-required' while using upgrade requestor mode"+
+		"and joint requestor flow", func() {
+		// Verify that joined requestor has been removed itself from Spec.AdditionalRequestors list
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "")
+		defer cancel()
+
+		clusterState := withClusterUpgradeState(3, upgrade.UpgradeStateUncordonRequired, namespace,
+			map[string]string{upgrade.GetUpgradeRequestedAnnotationKey(): "true"}, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		By("verify node-maintenance obj(s) exists")
+		nms := &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(testCtx, nms)
+			return len(nms.Items) == len(clusterState.NodeStates[upgrade.UpgradeStateUncordonRequired])
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		By("update node-maintenance obj(s) additional requestors list")
+		for _, item := range nms.Items {
+			if item.Spec.AdditionalRequestors == nil {
+				item.Spec.AdditionalRequestors = make([]string, 0)
+			}
+			originalNm := item.DeepCopy()
+			item.Spec.AdditionalRequestors = append(item.Spec.AdditionalRequestors, SecondaryTestRequestorID)
+			err := k8sClient.Patch(testCtx, &item, client.MergeFrom(originalNm))
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		By("verify nodes stays in 'uncordon-required' state")
+		Eventually(func() error {
+			nodes := &corev1.NodeList{}
+			err := k8sClient.List(testCtx, nodes)
+			Expect(err).NotTo(HaveOccurred())
+			for _, node := range nodes.Items {
+				if getNodeUpgradeState(&node) != upgrade.UpgradeStateUncordonRequired {
+					return fmt.Errorf("missing status condition")
+				}
+			}
+			return nil
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(Succeed())
+
+		By("verify modified node maintenance obj(s)")
+		Eventually(func() bool {
+			nms := &maintenancev1alpha1.NodeMaintenanceList{}
+			err := k8sClient.List(testCtx, nms)
+			if err != nil {
+				return false
+			}
+
+			for _, item := range nms.Items {
+				if len(item.Spec.AdditionalRequestors) == 0 {
+					return false
+				}
+				Expect(item.Spec.AdditionalRequestors).NotTo(ContainElement(opts.Requestor.MaintenanceOPRequestorID))
+				Expect(item.Labels).NotTo(HaveKey(upgrade.GetUpgradeRequestorLabelKey(opts.Requestor.MaintenanceOPRequestorID)))
+			}
+			return true
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
+
+		By("verify node-maintenance obj(s) have been deleted")
+		nms = &maintenancev1alpha1.NodeMaintenanceList{}
+		Eventually(func() bool {
+			k8sClient.List(testCtx, nms)
+			return len(nms.Items) == 0
+		}).WithTimeout(10 * time.Second).WithPolling(1 * 500 * time.Millisecond).Should(BeTrue())
 	})
 
 	It("UpgradeStateManager should move outdated node to UpgradeRequired states with orphaned pod if 'upgrade-requested' "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		orphanedPod := &corev1.Pod{}
@@ -1576,7 +1784,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	It("UpgradeStateManager should move up-to-date nodes with safe driver loading annotation "+
 		"to UpgradeRequired state, while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		safeLoadAnnotationKey := upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()
@@ -1602,7 +1810,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		"if it's in ValidationRequired, validation has completed, and node was initially Unschedulable "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
-		cancel := withUpgradeRequestorMode(testCtx, namespace)
+		cancel := withUpgradeRequestorMode(testCtx, namespace, "test")
 		defer cancel()
 
 		node := NewNode(fmt.Sprintf("node1-%s", id)).
@@ -1693,12 +1901,13 @@ func withClusterUpgradeState(nodeCount int, nodeState string, namespace string,
 
 }
 
-func withUpgradeRequestorMode(testCtx context.Context, namespace string) context.CancelFunc {
+func withUpgradeRequestorMode(testCtx context.Context, namespace, prefix string) context.CancelFunc {
 	var err error
+
 	os.Setenv("MAINTENANCE_OPERATOR_ENABLED", "true")
 	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE", namespace)
-	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_ID", "network.opeator.com")
-	os.Setenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX", "test")
+	os.Setenv("MAINTENANCE_OPERATOR_REQUESTOR_ID", testRequestorID)
+	os.Setenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX", prefix)
 
 	_, cancelFn := context.WithCancel(testCtx)
 	opts.Requestor = upgrade.GetRequestorOptsFromEnvs()
