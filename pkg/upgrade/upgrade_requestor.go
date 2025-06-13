@@ -24,6 +24,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 
 	//nolint:depguard
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
@@ -48,6 +49,10 @@ const (
 	MaintenanceOPEvictionGPU = "nvidia.com/gpu-*"
 	// MaintenanceOPEvictionRDMA is a default filter for Network OP pods eviction
 	MaintenanceOPEvictionRDMA = "nvidia.com/rdma*"
+	// DefaultNodeMaintenanceRequestorID is a default requestor ID for NVIDIA operators, in nodeMaintenance object
+	DefaultNodeMaintenanceRequestorID = "nvidia.operator.com"
+	// DefaultNodeMaintenanceNamePrefix is a default prefix for nodeMaintenance object name
+	DefaultNodeMaintenanceNamePrefix = "nvidia-operator"
 )
 
 var (
@@ -120,8 +125,18 @@ func (p ConditionChangedPredicate) Update(e event.TypedUpdateEvent[client.Object
 		return false
 	}
 
-	// check for matching requestor ID
-	if newO.Spec.RequestorID != p.requestorID {
+	// check if requestor label exists, if not ignore event
+	// in case requestor label is removed, ignore event
+	if newO.Labels == nil {
+		p.log.Error(nil, "NodeMaintenance object has no labels, ignoring event",
+			"requestorID", p.requestorID, "objectName", newO.Name, "objectNamespace", newO.Namespace)
+		return false
+	}
+	// check if requestor label exists, if not ignore event
+	_, ok = newO.Labels[GetUpgradeRequestorLabelKey(p.requestorID)]
+	if !ok {
+		p.log.V(consts.LogLevelDebug).Info("NodeMaintenance object does not belong to this requestor, ignoring event",
+			"requestorID", p.requestorID, "objectName", newO.Name, "objectNamespace", newO.Namespace)
 		return false
 	}
 
@@ -165,13 +180,16 @@ func SetDefaultNodeMaintenance(opts RequestorOptions,
 func (m *RequestorNodeStateManagerImpl) NewNodeMaintenance(nodeName string) *maintenancev1alpha1.NodeMaintenance {
 	nm := defaultNodeMaintenance.DeepCopy()
 	nm.Name = m.getNodeMaintenanceName(nodeName)
+	// mark nodeMaintenance object as updated by the requestor
+	nm.Labels = make(map[string]string)
+	nm.Labels[GetUpgradeRequestorLabelKey(m.opts.MaintenanceOPRequestorID)] = trueString
 	nm.Spec.NodeName = nodeName
 
 	return nm
 }
 
-// CreateNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
-func (m *RequestorNodeStateManagerImpl) CreateNodeMaintenance(ctx context.Context,
+// createNodeMaintenance creates nodeMaintenance obj for designated node upgrade-required state
+func (m *RequestorNodeStateManagerImpl) createNodeMaintenance(ctx context.Context,
 	nodeState *NodeUpgradeState) error {
 	nm := m.NewNodeMaintenance(nodeState.Node.Name)
 	nodeState.NodeMaintenance = nm
@@ -206,8 +224,8 @@ func (m *RequestorNodeStateManagerImpl) GetNodeMaintenanceObj(ctx context.Contex
 	return nm, nil
 }
 
-// DeleteNodeMaintenance requests to delete nodeMaintenance obj
-func (m *RequestorNodeStateManagerImpl) DeleteNodeMaintenance(ctx context.Context,
+// deleteNodeMaintenance requests to delete nodeMaintenance obj
+func (m *RequestorNodeStateManagerImpl) deleteNodeMaintenance(ctx context.Context,
 	nodeState *NodeUpgradeState) error {
 	_, err := validateNodeMaintenance(nodeState)
 	if err != nil {
@@ -271,7 +289,7 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 	SetDefaultNodeMaintenance(m.opts, upgradePolicy)
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUpgradeRequired] {
 		if m.IsUpgradeRequested(nodeState.Node) {
-			// Make sure to remove the upgrade-requested annotation
+			// make sure to remove the upgrade-requested annotation
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
 				GetUpgradeRequestedAnnotationKey(), "null")
 			if err != nil {
@@ -285,14 +303,14 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			continue
 		}
 
-		err := m.CreateNodeMaintenance(ctx, nodeState)
+		err := m.createOrUpdateNodeMaintenance(ctx, nodeState)
 		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(err, "failed to create nodeMaintenance")
+			m.Log.V(consts.LogLevelError).Error(err, "failed to create or update nodeMaintenance")
 			return err
 		}
 
 		annotationKey := GetUpgradeRequestorModeAnnotationKey()
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, "true")
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey, trueString)
 		if err != nil {
 			return fmt.Errorf("failed annotate node for 'upgrade-requestor-mode'. %v", err)
 		}
@@ -301,6 +319,116 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			UpgradeStateNodeMaintenanceRequired)
 		if err != nil {
 			return fmt.Errorf("failed to update node state. %v", err)
+		}
+	}
+
+	return nil
+}
+func (m *RequestorNodeStateManagerImpl) createOrUpdateNodeMaintenance(ctx context.Context,
+	nodeState *NodeUpgradeState) error {
+	// 1. check if nodeMaintenance obj exists.
+	// 2. if exists append requestorID to spec.AdditionalRequestors list.
+	// 3. each operator should add his dedicated operator label key name to the nodeMaintenance object.
+	// 4. upon uncordon-required, non-owning operator should remove itself from spec.AdditionalRequestors list.
+	//    should be made with optimistic lock + patch command.
+	//    the operator should remove his dedicated label key name from the nodeMaintenance object.
+	// 5. owning nodeMaintenance operator should call delete for nodeMaintenance object, maintenance OP should handle
+	//    additional requestors mode.
+
+	// check for existing nodeMaintenance obj
+	if nodeState.NodeMaintenance != nil {
+		// if exists append requestorID to spec.AdditionalRequestors list
+		nm, ok := nodeState.NodeMaintenance.(*maintenancev1alpha1.NodeMaintenance)
+		if !ok {
+			return fmt.Errorf("failed to cast object to NodeMaintenance. %v", nm)
+		}
+		// check if object is owned by the requestor, if so skip re-creation
+		if nm.Spec.RequestorID == m.opts.MaintenanceOPRequestorID {
+			m.Log.V(consts.LogLevelInfo).Info("nodeMaintenance already exists", nm.Name, "skip creation")
+			return nil
+		}
+		// check if name contains default prefix
+		if !strings.Contains(nm.Name, DefaultNodeMaintenanceNamePrefix) {
+			m.Log.V(consts.LogLevelWarning).Info("cannot append additional requestor, since default prefix is not used. %s",
+				"obj", nm.Name)
+			return nil
+		}
+
+		// check if requestor is already in AdditionalRequestors
+		if slices.Contains(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID) {
+			m.Log.V(consts.LogLevelInfo).Info("requestor already in AdditionalRequestors list",
+				"requestorID", m.opts.MaintenanceOPRequestorID)
+			return nil
+		}
+
+		m.Log.V(consts.LogLevelInfo).Info("appending new requestor", nm.Spec.RequestorID, "under 'AdditionalRequestors' list")
+		// create a deep copy of the original object before modifying it
+		originalNm := nm.DeepCopy()
+		// update AdditionalRequestor list using optimistic lock and patch command
+		nm.Spec.AdditionalRequestors = append(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID)
+		if nm.Labels == nil {
+			nm.Labels = make(map[string]string)
+		}
+		// only set label if it doesn't exist
+		if _, exists := nm.Labels[GetUpgradeRequestorLabelKey(m.opts.MaintenanceOPRequestorID)]; !exists {
+			nm.Labels[GetUpgradeRequestorLabelKey(m.opts.MaintenanceOPRequestorID)] = trueString
+		}
+		err := m.K8sClient.Patch(ctx, nm, client.MergeFrom(originalNm))
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(err, "failed to update nodeMaintenance")
+			return err
+		}
+	} else {
+		err := m.createNodeMaintenance(ctx, nodeState)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(err, "failed to create nodeMaintenance")
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *RequestorNodeStateManagerImpl) deleteOrUpdateNodeMaintenance(ctx context.Context,
+	nodeState *NodeUpgradeState) error {
+	// check for existing nodeMaintenance obj
+	if nodeState.NodeMaintenance != nil {
+		nm, ok := nodeState.NodeMaintenance.(*maintenancev1alpha1.NodeMaintenance)
+		if !ok {
+			return fmt.Errorf("failed to cast object to NodeMaintenance. %v", nodeState.NodeMaintenance)
+		}
+		// check if object is owned by deleting requestor, if so proceed to deletion
+		if nm.Spec.RequestorID == m.opts.MaintenanceOPRequestorID {
+			m.Log.V(consts.LogLevelInfo).Info("deleting node maintenance",
+				nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
+			err := m.deleteNodeMaintenance(ctx, nodeState)
+			if err != nil {
+				m.Log.V(consts.LogLevelWarning).Error(
+					err, "Node uncordon failed", "node", nodeState.Node)
+				return err
+			}
+		} else {
+			m.Log.V(consts.LogLevelInfo).Info("removing requestor from node maintenance additional requestors list",
+				nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
+			// remove requestorID from spec.AdditionalRequestors list and patch the object
+			// check if requestorID is under additional requestors list
+			if slices.Contains(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID) {
+				originalNm := nm.DeepCopy()
+				nm.Spec.AdditionalRequestors = slices.DeleteFunc(nm.Spec.AdditionalRequestors, func(id string) bool {
+					return id == m.opts.MaintenanceOPRequestorID
+				})
+				// remove requestorID label from the object
+				// only remove label if it exists
+				if nm.Labels != nil {
+					if _, exists := nm.Labels[GetUpgradeRequestorLabelKey(m.opts.MaintenanceOPRequestorID)]; exists {
+						delete(nm.Labels, GetUpgradeRequestorLabelKey(m.opts.MaintenanceOPRequestorID))
+					}
+				}
+				err := m.K8sClient.Patch(ctx, nm, client.MergeFrom(originalNm))
+				if err != nil {
+					return fmt.Errorf("failed to update nodeMaintenance. %v", err)
+				}
+			}
 		}
 	}
 
@@ -354,34 +482,27 @@ func (m *RequestorNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUncordonRequired] {
-		m.Log.V(consts.LogLevelDebug).Info("deleting node maintenance",
-			nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
-		// skip in case node undergoes uncordon by inplace flow
+		// skip in case node undergoes uncordon by in-place flow
 		if nodeState.NodeMaintenance == nil {
+			// only when nodeMaintenance obj is deleted, node state should be updated to 'upgrade-done'
+			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
+			if err != nil {
+				m.Log.V(consts.LogLevelError).Error(
+					err, "Failed to change node upgrade state", "state", UpgradeStateDone)
+				return err
+			}
+			// remove requestor upgrade annotation
+			err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx,
+				nodeState.Node, GetUpgradeRequestorModeAnnotationKey(), "null")
+			if err != nil {
+				return fmt.Errorf("failed to remove '%s' annotation . %v", GetUpgradeRequestorModeAnnotationKey(), err)
+			}
 			return nil
 		}
-		err := m.DeleteNodeMaintenance(ctx, nodeState)
+		err := m.deleteOrUpdateNodeMaintenance(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelWarning).Error(
 				err, "Node uncordon failed", "node", nodeState.Node)
-			return err
-		}
-		// this means that node maintenance obj has been deleted
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
-			UpgradeStateDone)
-		if err != nil {
-			return fmt.Errorf("failed to update node state. %v", err)
-		}
-		// remove requestor upgrade annotation
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx,
-			nodeState.Node, GetUpgradeRequestorModeAnnotationKey(), "null")
-		if err != nil {
-			return fmt.Errorf("failed to remove '%s' annotation . %v", GetUpgradeRequestorModeAnnotationKey(), err)
-		}
-		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
-		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(
-				err, "Failed to change node upgrade state", "state", UpgradeStateDone)
 			return err
 		}
 	}
@@ -427,7 +548,7 @@ func convertV1Alpha1ToMaintenance(upgradePolicy *v1alpha1.DriverUpgradePolicySpe
 // GetRequestorEnvs returns requstor upgrade related options according to provided environment variables
 func GetRequestorOptsFromEnvs() RequestorOptions {
 	opts := RequestorOptions{}
-	if os.Getenv("MAINTENANCE_OPERATOR_ENABLED") == "true" {
+	if os.Getenv("MAINTENANCE_OPERATOR_ENABLED") == trueString {
 		opts.UseMaintenanceOperator = true
 	}
 	if os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_NAMESPACE") != "" {
@@ -438,12 +559,12 @@ func GetRequestorOptsFromEnvs() RequestorOptions {
 	if os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID") != "" {
 		opts.MaintenanceOPRequestorID = os.Getenv("MAINTENANCE_OPERATOR_REQUESTOR_ID")
 	} else {
-		opts.MaintenanceOPRequestorID = "nvidia.operator.com"
+		opts.MaintenanceOPRequestorID = DefaultNodeMaintenanceRequestorID
 	}
 	if os.Getenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX") != "" {
 		opts.NodeMaintenanceNamePrefix = os.Getenv("MAINTENANCE_OPERATOR_NODE_MAINTENANCE_PREFIX")
 	} else {
-		opts.NodeMaintenanceNamePrefix = "nvidia-operator"
+		opts.NodeMaintenanceNamePrefix = DefaultNodeMaintenanceNamePrefix
 	}
 	return opts
 }
