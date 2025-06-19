@@ -114,6 +114,21 @@ controller manager watchers:
 > Meaning in case node undergoes upgrade prior to enabling `requestor` mode, node will continue `inplace` upgrade mode. Only after `requestor` mode is set, and upgrade
 > controller has set nodes state to be upgrade-required, only then new requestor mode will take place.
 
+###### shared-requestor
+The requestor mode supports a `shared-requestor` flow where multiple operators can coordinate node maintenance operations:
+Assumptions:
+1. Cluster admin, which requires `shared-requestor` flow, needs to make sure that all operators, utilizing maintenance OP, use same upgrade policy specs (same drainSpec).
+2. To be able to accommodate both GPU/Network drivers upgrade, `DrainSpec.PodSelector` should be set accordingly (hard-coded). 
+ * podSelector: `nvidia.com/ofed-driver-upgrade-drain.skip!=true,nvidia.com/gpu-driver-upgrade-drain.skip!=true`
+3. No custom `NodeMaintenanceNamePrefix` should be used. Requestor will use `DefaultNodeMaintenanceNamePrefix` as a common prefix for nodeMaintenance name.
+Flow:
+1. Each operator adds its dedicated operator label to the nodeMaintenance object
+2. When a nodeMaintenance object exists, additional operators append their requestorID to the spec.AdditionalRequestors list
+3. During `uncordon-required` completion:
+   - Non-owning operators remove themselves from spec.AdditionalRequestors list using optimistic locking
+   - Each operator removes its dedicated label from the nodeMaintenance object
+4. The owning nodeMaintenance operator handles the actual, client side, deletion of the nodeMaintenance object
+
 ### Troubleshooting
 #### Node is in `upgrade-failed` state
 * Drain the node manually by running `kubectl drain <node_name> --ignore-daemonsets`

@@ -94,6 +94,7 @@ type CommonUpgradeManagerImpl struct {
 	ValidationManager        ValidationManager
 	SafeDriverLoadManager    SafeDriverLoadManager
 
+	shouldSkipUpgradeDoneFunc func(requestorID string, nodeState *NodeUpgradeState) (bool, error)
 	// optional states
 	podDeletionStateEnabled bool
 	validationStateEnabled  bool
@@ -104,6 +105,7 @@ func NewCommonUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
 	scheme *runtime.Scheme,
+	skipFunc func(requestorID string, nodeState *NodeUpgradeState) (bool, error),
 	eventRecorder record.EventRecorder) (*CommonUpgradeManagerImpl, error) {
 	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
 	if err != nil {
@@ -117,16 +119,17 @@ func NewCommonUpgradeStateManager(
 
 	nodeUpgradeStateProvider := NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 	commonUpgrade := CommonUpgradeManagerImpl{
-		Log:                      log,
-		K8sClient:                k8sClient,
-		K8sInterface:             k8sInterface,
-		EventRecorder:            eventRecorder,
-		DrainManager:             NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder),
-		PodManager:               NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, nil, eventRecorder),
-		CordonManager:            NewCordonManager(k8sInterface, log),
-		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
-		ValidationManager:        NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
-		SafeDriverLoadManager:    NewSafeDriverLoadManager(nodeUpgradeStateProvider, log),
+		Log:                       log,
+		K8sClient:                 k8sClient,
+		K8sInterface:              k8sInterface,
+		EventRecorder:             eventRecorder,
+		DrainManager:              NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder),
+		PodManager:                NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, nil, eventRecorder),
+		CordonManager:             NewCordonManager(k8sInterface, log),
+		NodeUpgradeStateProvider:  nodeUpgradeStateProvider,
+		ValidationManager:         NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
+		SafeDriverLoadManager:     NewSafeDriverLoadManager(nodeUpgradeStateProvider, log),
+		shouldSkipUpgradeDoneFunc: skipFunc,
 	}
 
 	return &commonUpgrade, nil
@@ -487,7 +490,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 			}
 			if driverPodInSync {
 				if !m.IsValidationEnabled() {
-					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState.Node)
+					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState)
 					if err != nil {
 						return err
 					}
@@ -595,7 +598,7 @@ func (m *CommonUpgradeManagerImpl) ProcessValidationRequiredNodes(
 			continue
 		}
 
-		err = m.updateNodeToUncordonOrDoneState(ctx, node)
+		err = m.updateNodeToUncordonOrDoneState(ctx, nodeState)
 		if err != nil {
 			return err
 		}
@@ -670,16 +673,30 @@ func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
 // updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
 // was Unschedulable at the beginning of the upgrade so that the node remains in the same state as
 // when the upgrade started. In addition, the annotation tracking this information is removed.
-func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context, node *corev1.Node) error {
+func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context,
+	nodeState *NodeUpgradeState) error {
+	var (
+		shouldSkip bool
+		err        error
+	)
+	node := nodeState.Node
 	newUpgradeState := UpgradeStateUncordonRequired
 	annotationKey := GetUpgradeInitialStateAnnotationKey()
-	if _, ok := node.Annotations[annotationKey]; ok {
-		m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
-			"node", node.Name)
-		newUpgradeState = UpgradeStateDone
+	if m.shouldSkipUpgradeDoneFunc != nil {
+		shouldSkip, err = m.shouldSkipUpgradeDoneFunc(GetRequestorOptsFromEnvs().MaintenanceOPRequestorID, nodeState)
+		if err != nil {
+			return err
+		}
+	}
+	if !shouldSkip {
+		if _, ok := node.Annotations[annotationKey]; ok {
+			m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
+				"node", node.Name)
+			newUpgradeState = UpgradeStateDone
+		}
 	}
 
-	err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
+	err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
 			err, "Failed to change node upgrade state", "node", node.Name, "state", newUpgradeState)

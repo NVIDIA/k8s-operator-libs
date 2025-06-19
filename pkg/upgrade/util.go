@@ -97,6 +97,11 @@ func SetDriverName(driver string) {
 	DriverName = driver
 }
 
+// GetUpgradeSkipDrainDriverPodSelector returns pod selector to skip drain for a given driver
+func GetUpgradeSkipDrainDriverPodSelector(driverName string) string {
+	return fmt.Sprintf(UpgradeSkipDrainDriverSelectorFmt+"!=true", driverName)
+}
+
 // GetUpgradeStateLabelKey returns state label key used for upgrades
 func GetUpgradeStateLabelKey() string {
 	return fmt.Sprintf(UpgradeStateLabelKeyFmt, DriverName)
@@ -105,6 +110,11 @@ func GetUpgradeStateLabelKey() string {
 // GetUpgradeSkipNodeLabelKey returns node label used to skip upgrades
 func GetUpgradeSkipNodeLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
+}
+
+// GetUpgradeRequestorLabelKey returns nodeMaintenance label used to mark obj as modified by requestor
+func GetUpgradeRequestorLabelKey(requestorID string) string {
+	return fmt.Sprintf(UpgradeRequestorLabelKeyFmt, requestorID)
 }
 
 // GetUpgradeDriverWaitForSafeLoadAnnotationKey returns the key for annotation used to mark node as waiting for driver
