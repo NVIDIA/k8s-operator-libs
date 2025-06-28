@@ -45,9 +45,6 @@ const (
 	// UpgradeRequestorModeAnnotationKeyFmt is the format of the node annotation indicating requestor driver upgrade
 	// mode is used for underlying node
 	UpgradeRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
-	// UpgradeRequestorLabelKeyFmt is the format of the nodeMaintenance label marked by requestor after modifying
-	// the nodeMaintenance object
-	UpgradeRequestorLabelKeyFmt = "nvidia.com/%s-requestor"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade

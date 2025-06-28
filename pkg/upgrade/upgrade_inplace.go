@@ -126,12 +126,8 @@ func (m *InplaceNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUncordonRequiredNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateUncordonRequired] {
-		// skip in case node had undergone uncordon by maintenance operator
-		if nodeState.NodeMaintenance != nil {
-			continue
-		}
 		// check if if node upgrade is handled by requestor mode, if so node uncordon will be performed by requestor flow
-		if _, exists := nodeState.Node.Annotations[GetUpgradeRequestorModeAnnotationKey()]; exists {
+		if IsNodeInRequestorMode(nodeState.Node) {
 			continue
 		}
 		err := m.CordonManager.Uncordon(ctx, nodeState.Node)

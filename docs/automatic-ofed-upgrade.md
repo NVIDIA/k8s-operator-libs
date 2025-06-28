@@ -122,12 +122,18 @@ Assumptions:
  * podSelector: `nvidia.com/ofed-driver-upgrade-drain.skip!=true,nvidia.com/gpu-driver-upgrade-drain.skip!=true`
 3. No custom `NodeMaintenanceNamePrefix` should be used. Requestor will use `DefaultNodeMaintenanceNamePrefix` as a common prefix for nodeMaintenance name.
 Flow:
-1. Each operator adds its dedicated operator label to the nodeMaintenance object
-2. When a nodeMaintenance object exists, additional operators append their requestorID to the spec.AdditionalRequestors list
-3. During `uncordon-required` completion:
-   - Non-owning operators remove themselves from spec.AdditionalRequestors list using optimistic locking
+1. When a nodeMaintenance object exists, additional operators append their requestorID to the spec.AdditionalRequestors list, using patch with optimistic lock
+2. During `uncordon-required` completion:
+   - Non-owning operators remove themselves from spec.AdditionalRequestors list using patch with optimistic lock
    - Each operator removes its dedicated label from the nodeMaintenance object
-4. The owning nodeMaintenance operator handles the actual, client side, deletion of the nodeMaintenance object
+3. The owning nodeMaintenance operator handles the actual, client side, deletion of the nodeMaintenance object
+
+> __Note__: `owning operator`
+> Its the operator that managed to create the `NodeMaintenance` object.
+> which means for a given `NodeMaintenance` obj (name of obj is the same in the shared-requestor mode for all cooperating operators) its the operator whose RequestorID is set under `spec.requestorID`.
+> `non owning` operator
+> Its the operator that did not create the `NodeMaintenances` object, which means for a given `NodeMaintenance` obj its the operator whose RequestorID is present under `spec.AdditionalRequestors`
+
 
 ### Troubleshooting
 #### Node is in `upgrade-failed` state

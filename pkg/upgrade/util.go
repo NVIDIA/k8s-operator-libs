@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 )
@@ -112,11 +113,6 @@ func GetUpgradeSkipNodeLabelKey() string {
 	return fmt.Sprintf(UpgradeSkipNodeLabelKeyFmt, DriverName)
 }
 
-// GetUpgradeRequestorLabelKey returns nodeMaintenance label used to mark obj as modified by requestor
-func GetUpgradeRequestorLabelKey(requestorID string) string {
-	return fmt.Sprintf(UpgradeRequestorLabelKeyFmt, requestorID)
-}
-
 // GetUpgradeDriverWaitForSafeLoadAnnotationKey returns the key for annotation used to mark node as waiting for driver
 // safe load
 func GetUpgradeDriverWaitForSafeLoadAnnotationKey() string {
@@ -133,6 +129,12 @@ func GetUpgradeRequestedAnnotationKey() string {
 // in progress
 func GetUpgradeRequestorModeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeRequestorModeAnnotationKeyFmt, DriverName)
+}
+
+// IsNodeInRequestorMode returns true if node is in requestor mode
+func IsNodeInRequestorMode(node *corev1.Node) bool {
+	_, ok := node.Annotations[GetUpgradeRequestorModeAnnotationKey()]
+	return ok
 }
 
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node

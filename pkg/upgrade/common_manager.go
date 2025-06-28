@@ -94,7 +94,6 @@ type CommonUpgradeManagerImpl struct {
 	ValidationManager        ValidationManager
 	SafeDriverLoadManager    SafeDriverLoadManager
 
-	shouldSkipUpgradeDoneFunc func(requestorID string, nodeState *NodeUpgradeState) (bool, error)
 	// optional states
 	podDeletionStateEnabled bool
 	validationStateEnabled  bool
@@ -105,7 +104,6 @@ func NewCommonUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
 	scheme *runtime.Scheme,
-	skipFunc func(requestorID string, nodeState *NodeUpgradeState) (bool, error),
 	eventRecorder record.EventRecorder) (*CommonUpgradeManagerImpl, error) {
 	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
 	if err != nil {
@@ -119,17 +117,16 @@ func NewCommonUpgradeStateManager(
 
 	nodeUpgradeStateProvider := NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
 	commonUpgrade := CommonUpgradeManagerImpl{
-		Log:                       log,
-		K8sClient:                 k8sClient,
-		K8sInterface:              k8sInterface,
-		EventRecorder:             eventRecorder,
-		DrainManager:              NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder),
-		PodManager:                NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, nil, eventRecorder),
-		CordonManager:             NewCordonManager(k8sInterface, log),
-		NodeUpgradeStateProvider:  nodeUpgradeStateProvider,
-		ValidationManager:         NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
-		SafeDriverLoadManager:     NewSafeDriverLoadManager(nodeUpgradeStateProvider, log),
-		shouldSkipUpgradeDoneFunc: skipFunc,
+		Log:                      log,
+		K8sClient:                k8sClient,
+		K8sInterface:             k8sInterface,
+		EventRecorder:            eventRecorder,
+		DrainManager:             NewDrainManager(k8sInterface, nodeUpgradeStateProvider, log, eventRecorder),
+		PodManager:               NewPodManager(k8sInterface, nodeUpgradeStateProvider, log, nil, eventRecorder),
+		CordonManager:            NewCordonManager(k8sInterface, log),
+		NodeUpgradeStateProvider: nodeUpgradeStateProvider,
+		ValidationManager:        NewValidationManager(k8sInterface, log, eventRecorder, nodeUpgradeStateProvider, ""),
+		SafeDriverLoadManager:    NewSafeDriverLoadManager(nodeUpgradeStateProvider, log),
 	}
 
 	return &commonUpgrade, nil
@@ -675,35 +672,31 @@ func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
 // when the upgrade started. In addition, the annotation tracking this information is removed.
 func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context,
 	nodeState *NodeUpgradeState) error {
-	var (
-		shouldSkip bool
-		err        error
-	)
 	node := nodeState.Node
 	newUpgradeState := UpgradeStateUncordonRequired
 	annotationKey := GetUpgradeInitialStateAnnotationKey()
-	if m.shouldSkipUpgradeDoneFunc != nil {
-		shouldSkip, err = m.shouldSkipUpgradeDoneFunc(GetRequestorOptsFromEnvs().MaintenanceOPRequestorID, nodeState)
-		if err != nil {
-			return err
-		}
-	}
-	if !shouldSkip {
-		if _, ok := node.Annotations[annotationKey]; ok {
+	isNodeUnderRequestorMode := IsNodeInRequestorMode(node)
+
+	if _, ok := node.Annotations[annotationKey]; ok {
+		// check if node is already in requestor mode, if not do update node to 'upgrade-done',
+		// otherwise node state will be handled by the requestor mode at uncordon-required completion
+		if !isNodeUnderRequestorMode {
 			m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
 				"node", node.Name)
 			newUpgradeState = UpgradeStateDone
 		}
 	}
 
-	err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
+	err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
 			err, "Failed to change node upgrade state", "node", node.Name, "state", newUpgradeState)
 		return err
 	}
 
-	if newUpgradeState == UpgradeStateDone {
+	// remove initial state annotation if node is in in-place mode, and was set to 'upgrade-done',
+	// or is in requestor mode
+	if newUpgradeState == UpgradeStateDone || isNodeUnderRequestorMode {
 		m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
 			"node", node.Name, "annotation", annotationKey)
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, "null")
