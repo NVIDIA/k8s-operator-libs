@@ -114,6 +114,27 @@ controller manager watchers:
 > Meaning in case node undergoes upgrade prior to enabling `requestor` mode, node will continue `inplace` upgrade mode. Only after `requestor` mode is set, and upgrade
 > controller has set nodes state to be upgrade-required, only then new requestor mode will take place.
 
+###### shared-requestor
+The requestor mode supports a `shared-requestor` flow where multiple operators can coordinate node maintenance operations:
+Assumptions:
+1. Cluster admin, which requires `shared-requestor` flow, needs to make sure that all operators, utilizing maintenance OP, use same upgrade policy specs (same drainSpec).
+2. To be able to accommodate both GPU/Network drivers upgrade, `DrainSpec.PodSelector` should be set accordingly (hard-coded). 
+ * podSelector: `nvidia.com/ofed-driver-upgrade-drain.skip!=true,nvidia.com/gpu-driver-upgrade-drain.skip!=true`
+3. No custom `NodeMaintenanceNamePrefix` should be used. Requestor will use `DefaultNodeMaintenanceNamePrefix` as a common prefix for nodeMaintenance name.
+Flow:
+1. When a nodeMaintenance object exists, additional operators append their requestorID to the spec.AdditionalRequestors list, using patch with optimistic lock
+2. During `uncordon-required` completion:
+   - Non-owning operators remove themselves from spec.AdditionalRequestors list using patch with optimistic lock
+   - Each operator removes its dedicated label from the nodeMaintenance object
+3. The owning nodeMaintenance operator handles the actual, client side, deletion of the nodeMaintenance object
+
+> __Note__: `owning operator`
+> Its the operator that managed to create the `NodeMaintenance` object.
+> which means for a given `NodeMaintenance` obj (name of obj is the same in the shared-requestor mode for all cooperating operators) its the operator whose RequestorID is set under `spec.requestorID`.
+> `non owning` operator
+> Its the operator that did not create the `NodeMaintenances` object, which means for a given `NodeMaintenance` obj its the operator whose RequestorID is present under `spec.AdditionalRequestors`
+
+
 ### Troubleshooting
 #### Node is in `upgrade-failed` state
 * Drain the node manually by running `kubectl drain <node_name> --ignore-daemonsets`

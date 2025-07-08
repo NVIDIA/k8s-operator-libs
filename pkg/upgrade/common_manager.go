@@ -487,7 +487,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 			}
 			if driverPodInSync {
 				if !m.IsValidationEnabled() {
-					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState.Node)
+					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState)
 					if err != nil {
 						return err
 					}
@@ -595,7 +595,7 @@ func (m *CommonUpgradeManagerImpl) ProcessValidationRequiredNodes(
 			continue
 		}
 
-		err = m.updateNodeToUncordonOrDoneState(ctx, node)
+		err = m.updateNodeToUncordonOrDoneState(ctx, nodeState)
 		if err != nil {
 			return err
 		}
@@ -670,13 +670,21 @@ func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
 // updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
 // was Unschedulable at the beginning of the upgrade so that the node remains in the same state as
 // when the upgrade started. In addition, the annotation tracking this information is removed.
-func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context, node *corev1.Node) error {
+func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.Context,
+	nodeState *NodeUpgradeState) error {
+	node := nodeState.Node
 	newUpgradeState := UpgradeStateUncordonRequired
 	annotationKey := GetUpgradeInitialStateAnnotationKey()
+	isNodeUnderRequestorMode := IsNodeInRequestorMode(node)
+
 	if _, ok := node.Annotations[annotationKey]; ok {
-		m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
-			"node", node.Name)
-		newUpgradeState = UpgradeStateDone
+		// check if node is already in requestor mode, if not do update node to 'upgrade-done',
+		// otherwise node state will be handled by the requestor mode at uncordon-required completion
+		if !isNodeUnderRequestorMode {
+			m.Log.V(consts.LogLevelInfo).Info("Node was Unschedulable at beginning of upgrade, skipping uncordon",
+				"node", node.Name)
+			newUpgradeState = UpgradeStateDone
+		}
 	}
 
 	err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, newUpgradeState)
@@ -686,7 +694,9 @@ func (m *CommonUpgradeManagerImpl) updateNodeToUncordonOrDoneState(ctx context.C
 		return err
 	}
 
-	if newUpgradeState == UpgradeStateDone {
+	// remove initial state annotation if node is in in-place mode, and was set to 'upgrade-done',
+	// or is in requestor mode
+	if newUpgradeState == UpgradeStateDone || isNodeUnderRequestorMode {
 		m.Log.V(consts.LogLevelDebug).Info("Removing node upgrade annotation",
 			"node", node.Name, "annotation", annotationKey)
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, "null")

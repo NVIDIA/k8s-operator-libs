@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 )
@@ -97,6 +98,11 @@ func SetDriverName(driver string) {
 	DriverName = driver
 }
 
+// GetUpgradeSkipDrainDriverPodSelector returns pod selector to skip drain for a given driver
+func GetUpgradeSkipDrainDriverPodSelector(driverName string) string {
+	return fmt.Sprintf(UpgradeSkipDrainDriverSelectorFmt+"!=true", driverName)
+}
+
 // GetUpgradeStateLabelKey returns state label key used for upgrades
 func GetUpgradeStateLabelKey() string {
 	return fmt.Sprintf(UpgradeStateLabelKeyFmt, DriverName)
@@ -123,6 +129,12 @@ func GetUpgradeRequestedAnnotationKey() string {
 // in progress
 func GetUpgradeRequestorModeAnnotationKey() string {
 	return fmt.Sprintf(UpgradeRequestorModeAnnotationKeyFmt, DriverName)
+}
+
+// IsNodeInRequestorMode returns true if node is in requestor mode
+func IsNodeInRequestorMode(node *corev1.Node) bool {
+	_, ok := node.Annotations[GetUpgradeRequestorModeAnnotationKey()]
+	return ok
 }
 
 // GetUpgradeInitialStateAnnotationKey returns the key for annotation used to track initial state of the node
