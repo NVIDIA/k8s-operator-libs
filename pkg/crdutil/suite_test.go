@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	v1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -32,11 +33,12 @@ import (
 var (
 	testCRDClient v1.CustomResourceDefinitionInterface
 	testEnv       *envtest.Environment
+	cfg           *rest.Config
 )
 
 func TestApplyCrds(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "ApplyCrds Suite")
+	RunSpecs(t, "CRDUtil Suite")
 }
 
 var _ = BeforeSuite(func() {
@@ -45,7 +47,8 @@ var _ = BeforeSuite(func() {
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{}
 
-	cfg, err := testEnv.Start()
+	var err error
+	cfg, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 

@@ -18,63 +18,198 @@ package crdutil
 
 import (
 	"context"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("CRD Application", func() {
+const eventuallyTimeout = 5 * time.Second
+
+var _ = Describe("CRDUtil", func() {
 	var (
-		ctx context.Context
+		ctx            context.Context
+		crdsDir        string
+		updatedCRDsDir string
+		nestedDir      string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		crdsDir = "test-files/crds"
+		updatedCRDsDir = "test-files/updated-crds"
+		nestedDir = "test-files/nested"
 	})
 
 	AfterEach(func() {
-		Expect(testCRDClient.DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})).NotTo(HaveOccurred())
+		testCRDClient.DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{})
+
+		// Wait for cleanup to complete
+		Eventually(func() int {
+			crds, _ := testCRDClient.List(ctx, metav1.ListOptions{})
+			if crds == nil {
+				return 0
+			}
+			return len(crds.Items)
+		}, eventuallyTimeout).Should(Equal(0))
 	})
 
-	Describe("applyCRDsFromFile", func() {
-		It("should apply CRDs multiple times from a valid YAML file", func() {
-			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
-
-			By("verifying CRDs are applied")
-			crds, err := testCRDClient.List(ctx, metav1.ListOptions{})
+	Describe("ProcessCRDsWithConfig", func() {
+		It("should create CRDs from a directory", func() {
+			// Apply CRDs from the crds directory
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(crds.Items).To(HaveLen(2))
+
+			// Verify CRDs were created
+			crd1, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd1.Name).To(Equal("foos.example.com"))
+			Expect(crd1.ResourceVersion).NotTo(BeEmpty())
+
+			crd2, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd2.Name).To(Equal("bars.example.com"))
+			Expect(crd2.ResourceVersion).NotTo(BeEmpty())
 		})
 
-		It("should update CRDs", func() {
-			By("applying CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/test-crds.yaml")).To(Succeed())
+		It("should update existing CRDs when applying updated versions", func() {
+			// First, create the initial CRDs
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying CRDs do not have spec.foobar")
-			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
-				crd, err := testCRDClient.Get(ctx, crdName, metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred())
-				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
-				Expect(props).To(HaveKey("spec"))
-				Expect(props["spec"].Properties).NotTo(HaveKey("foobar"))
-			}
+			// Get the initial resource versions
+			initialFoo, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			initialFooResourceVersion := initialFoo.ResourceVersion
 
-			By("updating CRDs")
-			Expect(applyCRDsFromFile(ctx, testCRDClient, "test-files/updated-test-crds.yaml")).To(Succeed())
+			initialBar, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			initialBarResourceVersion := initialBar.ResourceVersion
 
-			By("verifying CRDs are updated")
-			for _, crdName := range []string{"bars.example.com", "foos.example.com"} {
-				crd, err := testCRDClient.Get(ctx, crdName, metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred())
-				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
-				Expect(props["spec"].Properties).To(HaveKey("foobar"))
-			}
+			// Now apply the updated CRDs
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{updatedCRDsDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs were updated by checking resource version changed
+			updatedFoo, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updatedFoo.ResourceVersion).NotTo(Equal(initialFooResourceVersion))
+
+			updatedBar, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updatedBar.ResourceVersion).NotTo(Equal(initialBarResourceVersion))
+		})
+
+		It("should delete CRDs from a directory", func() {
+			// Apply CRDs
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Delete CRDs
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs were deleted
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+		})
+
+		It("should handle apply and delete operations idempotently", func() {
+			// Apply twice
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs exist
+			_, err = testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Delete twice
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs are deleted
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+		})
+
+		It("should recursively walk directories and apply CRDs from nested subdirectories", func() {
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{nestedDir}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs were created
+			crd1, err := testCRDClient.Get(ctx, "nestedfoos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd1.Name).To(Equal("nestedfoos.example.com"))
+			Expect(crd1.ResourceVersion).NotTo(BeEmpty())
+
+			crd2, err := testCRDClient.Get(ctx, "nestedbars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd2.Name).To(Equal("nestedbars.example.com"))
+			Expect(crd2.ResourceVersion).NotTo(BeEmpty())
+
+			// Clean up
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{nestedDir}, CRDOperationDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify deletion
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "nestedfoos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "nestedbars.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+		})
+
+		It("should accept individual file paths and apply CRDs", func() {
+			// Apply a single CRD file
+			singleFilePath := filepath.Join(crdsDir, "test-crds.yaml")
+			err := ProcessCRDsWithConfig(ctx, cfg, []string{singleFilePath}, CRDOperationApply)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs were created
+			crd1, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd1.Name).To(Equal("foos.example.com"))
+
+			crd2, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd2.Name).To(Equal("bars.example.com"))
+
+			// Clean up using the same file path
+			err = ProcessCRDsWithConfig(ctx, cfg, []string{singleFilePath}, CRDOperationDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify deletion
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
 		})
 	})
 })

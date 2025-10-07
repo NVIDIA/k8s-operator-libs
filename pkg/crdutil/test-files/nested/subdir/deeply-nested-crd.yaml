@@ -1,0 +1,47 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nestedfoos.example.com
+spec:
+  group: example.com
+  names:
+    kind: NestedFoo
+    listKind: NestedFooList
+    singular: nestedfoo
+    plural: nestedfoos
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+---
+# non CRD yamls should not be handled and skipped
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nestedbars.example.com
+spec:
+  group: example.com
+  names:
+    kind: NestedBar
+    listKind: NestedBarList
+    singular: nestedbar
+    plural: nestedbars
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
