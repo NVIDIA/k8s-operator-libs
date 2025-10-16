@@ -1,34 +1,41 @@
-# CRD Apply Tool
+# CRD Management Library
 
-This tool is designed to help deploy and manage Custom Resource Definitions (CRDs) in a Kubernetes cluster.
-It applies all CRDs found in specified directories, providing a solution to some of the limitations of Helm when it comes to managing CRDs.
+A Go library for deploying and managing Custom Resource Definitions (CRDs) in Kubernetes clusters.
+It supports both applying (creating/updating) and deleting CRDs from individual files or directories (searched recursively).
+
+This package is intended to be used programmatically in Go applications. An example CLI implementation is provided in [`examples/apply-crds/`](../../examples/apply-crds/) to demonstrate usage.
 
 ## Motivation
 
 While Helm is commonly used for managing Kubernetes resources, it has certain restrictions with CRDs:
 
-- CRDs placed in Helm's top-level `crds/` directory are not updated on upgrades or rollbacks.
-- Placing CRDs in Helm’s `templates/` directory is not entirely safe, as deletions and upgrades of CRDs are not always handled properly.
+- CRDs placed in a Helm chart's top-level `crds/` directory are installed once but not updated on upgrades or deleted on uninstalls.
+- Placing CRDs in a Helm chart's `templates/` directory allows updates but can be risky since CRDs are deleted on uninstall unless protected with the `helm.sh/resource-policy: keep` annotation.
 
-This tool offers a more reliable way to apply CRDs, ensuring they are created or updated as needed.
+This library offers a more reliable way to manage CRDs, ensuring they are created, updated, or deleted as needed.
 
 ## Features
 
-- **Apply CRDs from multiple directories**: Allows specifying multiple directories containing CRD YAML manifests.
-- **Recursive directory search**: Walks through each specified directory to find and apply all YAML files.
-- **Safe update mechanism**: Checks if a CRD already exists; if so, it updates it with the latest version.
+- **Apply and Delete CRDs**: Supports both applying (creating/updating) and deleting CRDs.
+- **Flexible input**: Accepts individual YAML files or directories (or a mix of both).
+- **Recursive directory search**: Automatically walks through directories to find and process all YAML files.
+- **Safe update mechanism**: Checks if a CRD already exists; if so, it updates it with retry-on-conflict logic.
+- **Idempotent operations**: Both apply and delete operations can be run multiple times safely.
 - **Handles multiple YAML documents**: Supports files containing multiple CRD documents separated by YAML document delimiters.
 
-## Usage
+## Quick Start
 
-Compile and run the tool by providing the `-crds-dir` flag with paths to the directories containing the CRD YAML files:
+For usage examples, see [`examples/apply-crds/`](../../examples/apply-crds/).
 
-```bash
-go build -o crd-apply-tool
-./crd-apply-tool -crds-dir /path/to/crds1 -crds-dir /path/to/crds2
-```
+## Integration Examples
 
-In a Helm pre-install hook it can look like:
+### Using in Helm Hooks
+
+You can build a custom binary using this library and deploy it as a Helm hook. Here's an example:
+
+#### Pre-install/Pre-upgrade Hook
+
+Apply CRDs before installation or upgrade:
 
 ```yaml
 apiVersion: batch/v1
@@ -51,11 +58,10 @@ spec:
           command:
             - /apply-crds
           args:
-              - --crds-dir=/crds/operator
+            - --crds-path=/opt/config/crds
+            - --operation=apply
 ```
 
-> Note: the image must contain all your CRDs in e.g. the `/crds/operator` directory.
+#### Pre-delete Hook
 
-## Flags
-
-- `-crds-dir` (required): Specifies a directory path that contains the CRD manifests in YAML format. This flag can be provided multiple times to apply CRDs from multiple directories.
+By default, Helm does not delete CRDs when a chart is uninstalled. Use caution when deleting CRDs in a pre-delete Helm hook. Deleting a CRD also removes all associated Custom Resources (CRs), which can lead to data loss if users upgrade by uninstalling and reinstalling the chart.
