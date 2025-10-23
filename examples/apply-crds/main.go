@@ -48,11 +48,11 @@ func main() {
 
 	switch operation {
 	case "apply":
-		if err := crdutil.ProcessCRDs(ctx, []string{crdsPath}, crdutil.CRDOperationApply); err != nil {
+		if err := crdutil.ProcessCRDs(ctx, crdutil.CRDOperationApply, crdsPath); err != nil {
 			log.Fatalf("Failed to apply CRDs: %v", err)
 		}
 	case "delete":
-		if err := crdutil.ProcessCRDs(ctx, []string{crdsPath}, crdutil.CRDOperationDelete); err != nil {
+		if err := crdutil.ProcessCRDs(ctx, crdutil.CRDOperationDelete, crdsPath); err != nil {
 			log.Fatalf("Failed to delete CRDs: %v", err)
 		}
 	default:
