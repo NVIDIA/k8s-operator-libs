@@ -60,7 +60,7 @@ var _ = Describe("CRDUtil", func() {
 	Describe("ProcessCRDsWithConfig", func() {
 		It("should create CRDs from a directory", func() {
 			// Apply CRDs from the crds directory
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs were created
@@ -77,7 +77,7 @@ var _ = Describe("CRDUtil", func() {
 
 		It("should update existing CRDs when applying updated versions", func() {
 			// First, create the initial CRDs
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Get the initial resource versions
@@ -90,7 +90,7 @@ var _ = Describe("CRDUtil", func() {
 			initialBarResourceVersion := initialBar.ResourceVersion
 
 			// Now apply the updated CRDs
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{updatedCRDsDir}, CRDOperationApply)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, updatedCRDsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs were updated by checking resource version changed
@@ -105,11 +105,11 @@ var _ = Describe("CRDUtil", func() {
 
 		It("should delete CRDs from a directory", func() {
 			// Apply CRDs
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Delete CRDs
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs were deleted
@@ -126,10 +126,10 @@ var _ = Describe("CRDUtil", func() {
 
 		It("should handle apply and delete operations idempotently", func() {
 			// Apply twice
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationApply)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs exist
@@ -137,10 +137,10 @@ var _ = Describe("CRDUtil", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Delete twice
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{crdsDir}, CRDOperationDelete)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, crdsDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs are deleted
@@ -151,7 +151,7 @@ var _ = Describe("CRDUtil", func() {
 		})
 
 		It("should recursively walk directories and apply CRDs from nested subdirectories", func() {
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{nestedDir}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, nestedDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs were created
@@ -166,7 +166,7 @@ var _ = Describe("CRDUtil", func() {
 			Expect(crd2.ResourceVersion).NotTo(BeEmpty())
 
 			// Clean up
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{nestedDir}, CRDOperationDelete)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, nestedDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify deletion
@@ -184,7 +184,7 @@ var _ = Describe("CRDUtil", func() {
 		It("should accept individual file paths and apply CRDs", func() {
 			// Apply a single CRD file
 			singleFilePath := filepath.Join(crdsDir, "test-crds.yaml")
-			err := ProcessCRDsWithConfig(ctx, cfg, []string{singleFilePath}, CRDOperationApply)
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, singleFilePath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CRDs were created
@@ -197,7 +197,7 @@ var _ = Describe("CRDUtil", func() {
 			Expect(crd2.Name).To(Equal("bars.example.com"))
 
 			// Clean up using the same file path
-			err = ProcessCRDsWithConfig(ctx, cfg, []string{singleFilePath}, CRDOperationDelete)
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, singleFilePath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify deletion
@@ -208,6 +208,55 @@ var _ = Describe("CRDUtil", func() {
 
 			Eventually(func() bool {
 				_, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+		})
+
+		It("should accept multiple directories as variadic arguments", func() {
+			// Apply CRDs from multiple directories at once
+			err := ProcessCRDsWithConfig(ctx, cfg, CRDOperationApply, crdsDir, nestedDir)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CRDs from first directory were created
+			crd1, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd1.Name).To(Equal("foos.example.com"))
+
+			crd2, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd2.Name).To(Equal("bars.example.com"))
+
+			// Verify CRDs from nested directory were created
+			crd3, err := testCRDClient.Get(ctx, "nestedfoos.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd3.Name).To(Equal("nestedfoos.example.com"))
+
+			crd4, err := testCRDClient.Get(ctx, "nestedbars.example.com", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd4.Name).To(Equal("nestedbars.example.com"))
+
+			// Clean up using the same multiple directories
+			err = ProcessCRDsWithConfig(ctx, cfg, CRDOperationDelete, crdsDir, nestedDir)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify all CRDs were deleted
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "foos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "bars.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "nestedfoos.example.com", metav1.GetOptions{})
+				return apierrors.IsNotFound(err)
+			}, eventuallyTimeout).Should(BeTrue())
+
+			Eventually(func() bool {
+				_, err := testCRDClient.Get(ctx, "nestedbars.example.com", metav1.GetOptions{})
 				return apierrors.IsNotFound(err)
 			}, eventuallyTimeout).Should(BeTrue())
 		})

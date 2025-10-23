@@ -53,7 +53,7 @@ const (
 // ProcessCRDs processes CRDs from the given paths based on the operation type.
 // It accepts both directories (walked recursively) and individual YAML files.
 // For each CRD found, it performs the specified operation (apply or delete).
-func ProcessCRDs(ctx context.Context, crdPaths []string, operation CRDOperation) error {
+func ProcessCRDs(ctx context.Context, operation CRDOperation, crdPaths ...string) error {
 	if len(crdPaths) == 0 {
 		return errors.New("at least one CRD path (file or directory) is required")
 	}
@@ -63,13 +63,13 @@ func ProcessCRDs(ctx context.Context, crdPaths []string, operation CRDOperation)
 		return fmt.Errorf("failed to get Kubernetes config: %w", err)
 	}
 
-	return ProcessCRDsWithConfig(ctx, config, crdPaths, operation)
+	return ProcessCRDsWithConfig(ctx, config, operation, crdPaths...)
 }
 
 // ProcessCRDsWithConfig processes CRDs using a provided Kubernetes REST config.
 // It accepts both directories (walked recursively) and individual YAML files,
 // parses them, and either applies or deletes them from the cluster.
-func ProcessCRDsWithConfig(ctx context.Context, config *rest.Config, crdPaths []string, operation CRDOperation) error {
+func ProcessCRDsWithConfig(ctx context.Context, config *rest.Config, operation CRDOperation, crdPaths ...string) error {
 	client, err := clientset.NewForConfig(config)
 	if err != nil {
 		return fmt.Errorf("failed to create API extensions client: %w", err)
