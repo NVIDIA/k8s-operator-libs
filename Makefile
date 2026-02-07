@@ -42,9 +42,9 @@ CONTROLLER_GEN ?= $(TOOLSDIR)/controller-gen
 GCOV2LCOV ?= $(TOOLSDIR)/gcov2lcov
 SETUP_ENVTEST ?= $(TOOLSDIR)/setup-envtest
 GOLANGCILINT_VERSION ?= v2.1.6
-CONTROLLER_GEN_VERSION ?= v0.16.5
+CONTROLLER_GEN_VERSION ?= v0.20.0
 GCOV2LCOV_VERSION ?= v1.1.1
-SETUP_ENVTEST_RELEASE ?= release-0.19
+SETUP_ENVTEST_RELEASE ?= release-0.23
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
