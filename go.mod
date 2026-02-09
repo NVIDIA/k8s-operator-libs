@@ -3,7 +3,7 @@ module github.com/NVIDIA/k8s-operator-libs
 go 1.25.0
 
 require (
-	github.com/Mellanox/maintenance-operator/api v0.2.2
+	github.com/Mellanox/maintenance-operator/api v0.3.0
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
