@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/Mellanox/maintenance-operator/api v0.3.0
 	github.com/go-logr/logr v1.4.3
-	github.com/onsi/ginkgo/v2 v2.28.3
+	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.40.0
 	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.36.0
