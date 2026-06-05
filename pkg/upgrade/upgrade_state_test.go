@@ -37,8 +37,8 @@ import (
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 
-	v1alpha1 "github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
-	upgrade "github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
+	"github.com/NVIDIA/k8s-operator-libs/api/upgrade/v1alpha1"
+	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade/mocks"
 )
 
@@ -47,6 +47,21 @@ var (
 	stateManagerInterface upgrade.ClusterUpgradeStateManager
 	opts                  upgrade.StateOptions
 )
+
+// fakeSafeDriverLoadManager lets tests control the result of the safe driver load check,
+// including the error path that the default annotation-based implementation never returns.
+type fakeSafeDriverLoadManager struct {
+	waiting bool
+	err     error
+}
+
+func (f *fakeSafeDriverLoadManager) IsWaitingForSafeDriverLoad(_ context.Context, _ *corev1.Node) (bool, error) {
+	return f.waiting, f.err
+}
+
+func (f *fakeSafeDriverLoadManager) UnblockLoading(_ context.Context, _ *corev1.Node) error {
+	return nil
+}
 
 var _ = Describe("UpgradeStateManager tests", func() {
 	var id string
@@ -346,6 +361,199 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			}
 			Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(2))
 			Expect(stateCount[upgrade.UpgradeStateCordonRequired]).To(Equal(maxParallelUpgrades))
+		})
+		When("a RestartOnlyPredicate is registered", func() {
+			var (
+				daemonSet   *appsv1.DaemonSet
+				outdatedPod *corev1.Pod
+			)
+			BeforeEach(func() {
+				daemonSet = &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+				// pod revision hash differs from the mocked DS hash ("test-hash-12345") -> out of sync
+				outdatedPod = &corev1.Pod{ObjectMeta: v1.ObjectMeta{
+					Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+			})
+
+			It("cordons the node and routes it to PodRestartRequired when the predicate returns true", func() {
+				var gotRunning, gotDesired *corev1.PodSpec
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(running, desired *corev1.PodSpec) (bool, error) {
+						gotRunning, gotDesired = running, desired
+						return true, nil
+					})
+				localCordonManager := mocks.CordonManager{}
+				localCordonManager.On("Cordon", mock.Anything, mock.Anything).Return(nil)
+				stateManager.CordonManager = &localCordonManager
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+				localCordonManager.AssertCalled(GinkgoT(), "Cordon", mock.Anything, node)
+				// predicate received the running pod spec and the desired DaemonSet template spec
+				Expect(gotRunning).To(Equal(&outdatedPod.Spec))
+				Expect(gotDesired).To(Equal(&daemonSet.Spec.Template.Spec))
+			})
+
+			It("leaves the node in UpgradeRequired for retry when the cordon fails", func() {
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						return true, nil
+					})
+				localCordonManager := mocks.CordonManager{}
+				localCordonManager.On("Cordon", mock.Anything, mock.Anything).Return(fmt.Errorf("cordon failure"))
+				stateManager.CordonManager = &localCordonManager
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			})
+
+			It("routes the node to CordonRequired when the predicate returns false", func() {
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						return false, nil
+					})
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			})
+
+			It("leaves the node in UpgradeRequired for retry when the predicate returns an error", func() {
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						return true, fmt.Errorf("predicate failure")
+					})
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			})
+
+			It("does not invoke the predicate for an orphaned pod", func() {
+				called := false
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						called = true
+						return true, nil
+					})
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: &corev1.Pod{}, DriverDaemonSet: nil}, // orphaned
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(called).To(BeFalse())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			})
+
+			It("does not invoke the predicate for an upgrade-requested node", func() {
+				called := false
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						called = true
+						return true, nil
+					})
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				node.Annotations[upgrade.GetUpgradeRequestedAnnotationKey()] = "true"
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(called).To(BeFalse())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			})
+
+			It("does not invoke the predicate for a node waiting for safe driver load", func() {
+				called := false
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						called = true
+						return true, nil
+					})
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				node.Annotations[upgrade.GetUpgradeDriverWaitForSafeLoadAnnotationKey()] = "true"
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(called).To(BeFalse())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			})
+
+			It("leaves the node in UpgradeRequired for retry when the safe driver load check fails", func() {
+				called := false
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						called = true
+						return true, nil
+					})
+				stateManager.SafeDriverLoadManager = &fakeSafeDriverLoadManager{
+					err: fmt.Errorf("safe load check failure")}
+				node := nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired)
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+					{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+					&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+				Expect(called).To(BeFalse())
+				Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			})
+
+			It("honors the maxParallelUpgrades throttle for restart-only nodes", func() {
+				const maxParallelUpgrades = 1
+				stateManagerInterface.WithRestartOnlyPredicate(
+					func(_, _ *corev1.PodSpec) (bool, error) {
+						return true, nil
+					})
+				nodeStates := []*upgrade.NodeUpgradeState{
+					{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired),
+						DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+					{Node: nodeWithUpgradeState(upgrade.UpgradeStateUpgradeRequired),
+						DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				}
+				clusterState := upgrade.NewClusterUpgradeState()
+				clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = nodeStates
+				policy := &v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true, MaxParallelUpgrades: maxParallelUpgrades}
+
+				Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+				stateCount := make(map[string]int)
+				for i := range nodeStates {
+					stateCount[getNodeUpgradeState(nodeStates[i].Node)]++
+				}
+				Expect(stateCount[upgrade.UpgradeStatePodRestartRequired]).To(Equal(maxParallelUpgrades))
+				Expect(stateCount[upgrade.UpgradeStateUpgradeRequired]).To(Equal(1))
+			})
 		})
 		It("UpgradeStateManager should start additional upgrades if maxParallelUpgrades limit is not reached", func() {
 			const maxParallelUpgrades = 4
