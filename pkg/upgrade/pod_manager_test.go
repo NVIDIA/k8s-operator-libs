@@ -264,6 +264,227 @@ var _ = Describe("PodManager", func() {
 			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
 		})
 
+		It("should ignore pod labels when no podSelector is set (backward compatible)", func() {
+			gpuPods = []*corev1.Pod{
+				NewPod(fmt.Sprintf("gpu-pod-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
+			}
+			// Labelled non-GPU pod that WOULD match a selector, but none is set.
+			labelledPod := NewPod(fmt.Sprintf("labelled-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create()
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			// PodSelector intentionally left empty.
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// Only the gpu pod is evicted; the labelled non-gpu pod and cpu pod remain.
+			Eventually(func() int {
+				podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(testCtx, metav1.ListOptions{})
+				Expect(err).To(Succeed())
+				return len(podList.Items)
+			}, "5s", "100ms").Should(Equal(len(cpuPods) + 1))
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: labelledPod.Name, Namespace: namespace.Name}, labelledPod)).To(Succeed())
+		})
+
+		It("should delete pods matching the additional podSelector that do not request a GPU,"+
+			" alongside gpu pods", func() {
+			gpuPods = []*corev1.Pod{
+				NewPod(fmt.Sprintf("gpu-pod-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
+			}
+			// Runtime-direct consumer: no nvidia.com/gpu request, so the injected
+			// gpuPodSpecFilter does not select it. It is reached only via the
+			// additional podSelector.
+			selectorPod := NewPod(fmt.Sprintf("runtime-gpu-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create()
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DeletionSpec.PodSelector = "nvidia.com/gpu-driver-upgrade-evict=true"
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// Only the unrelated cpu pod should remain.
+			Eventually(func() int {
+				podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(testCtx, metav1.ListOptions{})
+				Expect(err).To(Succeed())
+				return len(podList.Items)
+			}, "5s", "100ms").Should(Equal(len(cpuPods)))
+
+			// The selector-matched pod is evicted even though it requests no GPU.
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: selectorPod.Name, Namespace: namespace.Name}, selectorPod)).NotTo(Succeed())
+
+			node, err = provider.GetNode(testCtx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+		})
+
+		It("should delete a pod that both requests a GPU and matches the podSelector,"+
+			" without a count mismatch", func() {
+			gpuPods = []*corev1.Pod{
+				// Matches BOTH the gpu resource filter and the selector.
+				NewPod(fmt.Sprintf("gpu-and-label-%s", id), namespace.Name, node.Name).
+					WithResource("nvidia.com/gpu", "1").
+					WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create(),
+				// Matches the selector only.
+				NewPod(fmt.Sprintf("label-only-%s", id), namespace.Name, node.Name).
+					WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create(),
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DeletionSpec.PodSelector = "nvidia.com/gpu-driver-upgrade-evict=true"
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// Both pods evicted; the overlap pod is not double counted (which would
+			// otherwise trip the "cannot delete all required pods" path).
+			Eventually(func() int {
+				podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(testCtx, metav1.ListOptions{})
+				Expect(err).To(Succeed())
+				return len(podList.Items)
+			}, "5s", "100ms").Should(Equal(len(cpuPods)))
+
+			node, err = provider.GetNode(testCtx, node.Name)
+			Expect(err).To(Succeed())
+			Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStatePodRestartRequired))
+		})
+
+		It("should not delete pods that neither request a GPU nor match the podSelector", func() {
+			// A labelled non-GPU pod that does NOT match the configured selector
+			// must be left alone.
+			keepPod := NewPod(fmt.Sprintf("keep-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"app": "unrelated"}).Create()
+			// A pod with no labels at all must also be left alone by a positive selector.
+			barePod := NewPod(fmt.Sprintf("bare-pod-%s", id), namespace.Name, node.Name).Create()
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DeletionSpec.PodSelector = "nvidia.com/gpu-driver-upgrade-evict=true"
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// No pod matches, so the node proceeds and every pod survives.
+			Eventually(func() string {
+				n, err := provider.GetNode(testCtx, node.Name)
+				Expect(err).To(Succeed())
+				return n.Labels[upgrade.GetUpgradeStateLabelKey()]
+			}, "5s", "100ms").Should(Equal(upgrade.UpgradeStatePodRestartRequired))
+
+			podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(testCtx, metav1.ListOptions{})
+			Expect(err).To(Succeed())
+			Expect(podList.Items).To(HaveLen(len(cpuPods) + 2))
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: keepPod.Name, Namespace: namespace.Name}, keepPod)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: barePod.Name, Namespace: namespace.Name}, barePod)).To(Succeed())
+		})
+
+		It("should not evict a podSelector-matched pod that has already completed", func() {
+			// A Succeeded pod matches the label but is excluded by the phase guard,
+			// mirroring how the GPU Operator's own filter only considers
+			// Running/Pending pods.
+			donePod := NewPod(fmt.Sprintf("done-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create()
+			donePod.Status.Phase = corev1.PodSucceeded
+			Expect(updatePodStatus(donePod)).To(Succeed())
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			podManagerConfig.DeletionSpec.PodSelector = "nvidia.com/gpu-driver-upgrade-evict=true"
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			Eventually(func() string {
+				n, err := provider.GetNode(testCtx, node.Name)
+				Expect(err).To(Succeed())
+				return n.Labels[upgrade.GetUpgradeStateLabelKey()]
+			}, "5s", "100ms").Should(Equal(upgrade.UpgradeStatePodRestartRequired))
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: donePod.Name, Namespace: namespace.Name}, donePod)).To(Succeed())
+		})
+
+		It("should move the node to drain-required when a podSelector-matched pod cannot be"+
+			" force-deleted", func() {
+			// Standalone (unreplicated) labelled pod. Without Force the drain helper
+			// refuses it, so the pre-count and the deletable count disagree and the
+			// node falls back to drain. This proves selector-matched pods take part
+			// in the same consistency invariant as filter-matched pods.
+			NewPod(fmt.Sprintf("runtime-gpu-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create()
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.PodSelector = "nvidia.com/gpu-driver-upgrade-evict=true"
+			podManagerConfig.DrainEnabled = true
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			Eventually(func() string {
+				n, err := provider.GetNode(testCtx, node.Name)
+				Expect(err).To(Succeed())
+				return n.Labels[upgrade.GetUpgradeStateLabelKey()]
+			}, "5s", "100ms").Should(Equal(upgrade.UpgradeStateDrainRequired))
+		})
+
+		It("should treat a whitespace-only podSelector as empty", func() {
+			gpuPods = []*corev1.Pod{
+				NewPod(fmt.Sprintf("gpu-pod-%s", id), namespace.Name, node.Name).WithResource("nvidia.com/gpu", "1").Create(),
+			}
+			labelledPod := NewPod(fmt.Sprintf("labelled-pod-%s", id), namespace.Name, node.Name).
+				WithLabels(map[string]string{"nvidia.com/gpu-driver-upgrade-evict": "true"}).Create()
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.Force = true
+			// Whitespace-only selector must NOT be parsed as a match-everything selector.
+			podManagerConfig.DeletionSpec.PodSelector = "   "
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(Succeed())
+
+			// Only the gpu pod is evicted; the labelled non-gpu pod is not swept up.
+			Eventually(func() int {
+				podList, err := k8sInterface.CoreV1().Pods(namespace.Name).List(testCtx, metav1.ListOptions{})
+				Expect(err).To(Succeed())
+				return len(podList.Items)
+			}, "5s", "100ms").Should(Equal(len(cpuPods) + 1))
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: labelledPod.Name, Namespace: namespace.Name}, labelledPod)).To(Succeed())
+		})
+
+		It("should return an error when the additional podSelector is invalid", func() {
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			err := provider.ChangeNodeUpgradeState(testCtx, node, upgrade.UpgradeStatePodDeletionRequired)
+			Expect(err).To(Succeed())
+
+			podManagerConfig.DeletionSpec.PodSelector = "invalid selector"
+			manager := upgrade.NewPodManager(k8sInterface, provider, log, gpuPodSpecFilter, eventRecorder)
+			err = manager.SchedulePodEviction(testCtx, &podManagerConfig)
+			Expect(err).To(HaveOccurred())
+		})
+
 		It("should fail to delete all standalone gpu pods without force,"+
 			" and node should be moved to UpgradeStateFailed when drain is disabled", func() {
 			gpuPods = []*corev1.Pod{
