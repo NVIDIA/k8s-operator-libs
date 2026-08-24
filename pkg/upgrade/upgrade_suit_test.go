@@ -409,6 +409,10 @@ func (p Pod) WithResource(name, quantity string) Pod {
 }
 
 func (p Pod) WithOwnerReference(ownerRef metav1.OwnerReference) Pod {
+	if ownerRef.Controller == nil {
+		controller := true
+		ownerRef.Controller = &controller
+	}
 	p.OwnerReferences = append(p.OwnerReferences, ownerRef)
 	return p
 }
