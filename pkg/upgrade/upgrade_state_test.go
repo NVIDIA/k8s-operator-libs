@@ -1199,7 +1199,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			pod4.Status.InitContainerStatuses = []corev1.ContainerStatus{{Ready: false, RestartCount: 11}}
 
 			nodes := make([]*corev1.Node, 4)
-			for i := 0; i < len(nodes); i++ {
+			for i := range nodes {
 				nodes[i] = NewNode(fmt.Sprintf("node%d-%s", i, id)).
 					WithUpgradeState(upgrade.UpgradeStatePodRestartRequired).
 					Create()
