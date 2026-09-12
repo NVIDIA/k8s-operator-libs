@@ -45,6 +45,17 @@ const (
 	// UpgradeRequestorModeAnnotationKeyFmt is the format of the node annotation indicating requestor driver upgrade
 	// mode is used for underlying node
 	UpgradeRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
+	// DriverManagerCordonClaimAnnotation is the driver-manager's cordon ownership claim.
+	DriverManagerCordonClaimAnnotation = "nvidia.com/gpu-driver-manager.node-cordoned"
+	// DriverManagerInitialUnschedulableAnnotation is k8s-driver-manager's record of the node's prior
+	// unschedulable state. Only "false" marks a driver-manager cordon; "true" means the cordon predates it.
+	DriverManagerInitialUnschedulableAnnotation = "nvidia.com/driver-manager.node-initial-state.unschedulable"
+	// UpgradeControllerCordonClaimAnnotation is the upgrade controller's cordon ownership claim.
+	UpgradeControllerCordonClaimAnnotation = "nvidia.com/gpu-driver-upgrade-controller.node-cordoned"
+	// DriverManagerFieldManager is the field manager k8s-driver-manager uses for node patches.
+	DriverManagerFieldManager = "driver-manager"
+	// UpgradeControllerFieldManager is the field manager the upgrade controller uses for cordon patches.
+	UpgradeControllerFieldManager = "gpu-driver-upgrade-controller"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade
@@ -90,4 +101,6 @@ const (
 	nullString = "null"
 	// trueString is the word true as string to avoid duplication and linting errors
 	trueString = "true"
+	// falseString is the word false as string to avoid duplication and linting errors
+	falseString = "false"
 )

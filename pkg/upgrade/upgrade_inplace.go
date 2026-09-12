@@ -87,6 +87,14 @@ func (m *InplaceNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			continue
 		}
 
+		if m.SkipCordonedNode(nodeState.Node, upgradePolicy) {
+			// Hold the node in upgrade-required until it is uncordoned.
+			m.Log.V(consts.LogLevelInfo).Info(
+				"Node is cordoned, skipping driver upgrade until the node is uncordoned",
+				"node", nodeState.Node.Name)
+			continue
+		}
+
 		if upgradesAvailable <= 0 {
 			// when no new node upgrades are available, progess with manually cordoned nodes
 			if m.IsNodeUnschedulable(nodeState.Node) {
@@ -97,6 +105,11 @@ func (m *InplaceNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 					"node", nodeState.Node.Name)
 				continue
 			}
+		}
+
+		// Record schedulability before anything below can cordon the node.
+		if err := m.RecordInitialUnschedulableState(ctx, nodeState.Node); err != nil {
+			return err
 		}
 
 		targetState, terr := m.nextStateForUpgradeRequiredNode(ctx, nodeState, upgradeRequested)

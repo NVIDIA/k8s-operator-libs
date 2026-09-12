@@ -33,6 +33,11 @@ func (in *DriverUpgradePolicySpec) DeepCopyInto(out *DriverUpgradePolicySpec) {
 		*out = new(intstr.IntOrString)
 		**out = **in
 	}
+	if in.SkipCordonedNodes != nil {
+		in, out := &in.SkipCordonedNodes, &out.SkipCordonedNodes
+		*out = new(bool)
+		**out = **in
+	}
 	if in.PodDeletion != nil {
 		in, out := &in.PodDeletion, &out.PodDeletion
 		*out = new(PodDeletionSpec)

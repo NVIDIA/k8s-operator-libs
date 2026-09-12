@@ -296,6 +296,25 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			continue
 		}
 
+		if m.SkipCordonedNode(nodeState.Node, upgradePolicy) {
+			// Hold the node in upgrade-required until it is uncordoned.
+			m.Log.V(consts.LogLevelInfo).Info(
+				"Node is cordoned, skipping driver upgrade until the node is uncordoned",
+				"node", nodeState.Node.Name)
+			continue
+		}
+
+		if err := m.RecordInitialUnschedulableState(ctx, nodeState.Node); err != nil {
+			return err
+		}
+		// Claim the cordon before the maintenance request can cordon the node.
+		if nodeState.Node.Annotations[GetUpgradeInitialStateAnnotationKey()] != trueString {
+			if err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
+				UpgradeControllerCordonClaimAnnotation, trueString); err != nil {
+				return fmt.Errorf("failed to acquire upgrade-controller cordon claim: %w", err)
+			}
+		}
+
 		err := m.createOrUpdateNodeMaintenance(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "failed to create or update nodeMaintenance")
@@ -461,27 +480,30 @@ func (m *RequestorNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 		if !IsNodeInRequestorMode(nodeState.Node) {
 			continue
 		}
-		// change driver's operator node state to be updated 'upgrade-done'
-		// there could be cases
-		err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
+		err := m.deleteOrUpdateNodeMaintenance(ctx, nodeState)
+		if err != nil {
+			m.Log.V(consts.LogLevelWarning).Error(
+				err, "Node uncordon failed", "node", nodeState.Node)
+			return err
+		}
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node,
+			UpgradeControllerCordonClaimAnnotation, nullString)
+		if err != nil {
+			return fmt.Errorf("failed to release upgrade-controller cordon claim: %w", err)
+		}
+
+		// Move to upgrade-done only after the maintenance request and cordon claim are released.
+		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateDone)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
 				err, "Failed to change node upgrade state", "state", UpgradeStateDone)
 			return err
 		}
 
-		// remove requestor mode annotation
 		err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx,
-			nodeState.Node, GetUpgradeRequestorModeAnnotationKey(), "null")
+			nodeState.Node, GetUpgradeRequestorModeAnnotationKey(), nullString)
 		if err != nil {
-			return fmt.Errorf("failed to remove '%s' annotation . %v", GetUpgradeRequestorModeAnnotationKey(), err)
-		}
-
-		err = m.deleteOrUpdateNodeMaintenance(ctx, nodeState)
-		if err != nil {
-			m.Log.V(consts.LogLevelWarning).Error(
-				err, "Node uncordon failed", "node", nodeState.Node)
-			return err
+			return fmt.Errorf("failed to remove '%s' annotation: %w", GetUpgradeRequestorModeAnnotationKey(), err)
 		}
 	}
 	return nil
