@@ -238,7 +238,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 			Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 		})
-		It("UpgradeStateManager should move outdated nodes to UpgradeRequired state and annotate node if unschedulable", func() {
+		It("UpgradeStateManager should move outdated nodes to UpgradeRequired state "+
+			"without recording the initial unschedulable state", func() {
 			testCtx := context.TODO()
 
 			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
@@ -273,15 +274,124 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 			Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 
+			// Initial unschedulable state is recorded when the upgrade starts, not when it is detected.
 			Expect(isUnschedulableAnnotationPresent(UnknownToUpgradeRequiredNode)).
-				To(Equal(true))
+				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(DoneToUpgradeRequiredNode)).
-				To(Equal(true))
+				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(UnknownToDoneNode)).
 				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(DoneToDoneNode)).
 				To(Equal(false))
 
+		})
+		It("UpgradeStateManager should annotate an unschedulable node when its upgrade starts", func() {
+			testCtx := context.TODO()
+
+			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+			outdatedPod := &corev1.Pod{
+				ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+
+			cordonedNode := NewNode(fmt.Sprintf("node1-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Create()
+			schedulableNode := NewNode(fmt.Sprintf("node2-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Create()
+
+			clusterState := upgrade.NewClusterUpgradeState()
+			clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+				{Node: cordonedNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				{Node: schedulableNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			stateManager.NodeUpgradeStateProvider = provider
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+				&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true, SkipCordonedNodes: boolPtr(false)})).To(Succeed())
+
+			// Only the already-cordoned node is marked so uncordon leaves it as it was found.
+			Expect(getNodeUpgradeState(cordonedNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(getNodeUpgradeState(schedulableNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(isUnschedulableAnnotationPresent(cordonedNode)).To(Equal(true))
+			Expect(isUnschedulableAnnotationPresent(schedulableNode)).To(Equal(false))
+		})
+		It("UpgradeStateManager should clear a stale initial state annotation "+
+			"when the node is uncordoned before its upgrade starts", func() {
+			testCtx := context.TODO()
+
+			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+			outdatedPod := &corev1.Pod{
+				ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+
+			node := NewNode(fmt.Sprintf("node1-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).
+				WithAnnotations(map[string]string{
+					upgrade.GetUpgradeInitialStateAnnotationKey(): "true",
+				}).Create()
+
+			clusterState := upgrade.NewClusterUpgradeState()
+			clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+				{Node: node, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			stateManager.NodeUpgradeStateProvider = provider
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+				&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+
+			Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(isUnschedulableAnnotationPresent(node)).To(Equal(false))
+		})
+		It("UpgradeStateManager should leave already cordoned nodes alone by default", func() {
+			testCtx := context.TODO()
+
+			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+			outdatedPod := &corev1.Pod{
+				ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+
+			cordonedNode := NewNode(fmt.Sprintf("node1-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).Create()
+			schedulableNode := NewNode(fmt.Sprintf("node2-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Create()
+			gpuCordonedNode := NewNode(fmt.Sprintf("node3-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).
+				WithAnnotations(map[string]string{upgrade.DriverManagerCordonClaimAnnotation: "true"}).
+				Unschedulable(true).Create()
+			dmInitialStateNode := NewNode(fmt.Sprintf("node4-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).
+				WithAnnotations(map[string]string{upgrade.DriverManagerInitialUnschedulableAnnotation: "false"}).
+				Unschedulable(true).Create()
+
+			clusterState := upgrade.NewClusterUpgradeState()
+			clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+				{Node: cordonedNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				{Node: schedulableNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				{Node: gpuCordonedNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				{Node: dmInitialStateNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			stateManager.NodeUpgradeStateProvider = provider
+
+			policy := &v1alpha1.DriverUpgradePolicySpec{
+				AutoUpgrade: true,
+				// Unlimited upgrades and unavailable nodes, so skip (not limits) holds the cordoned node.
+				MaxParallelUpgrades: 0,
+				MaxUnavailable:      &intstr.IntOrString{Type: intstr.String, StrVal: "100%"},
+			}
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+
+			// The cordoned node stays in upgrade-required; the schedulable node upgrades as usual.
+			Expect(getNodeUpgradeState(cordonedNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			Expect(isUnschedulableAnnotationPresent(cordonedNode)).To(Equal(false))
+			Expect(getNodeUpgradeState(schedulableNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			// A GPU ownership claim is in-progress operator work, so the node continues upgrading.
+			Expect(getNodeUpgradeState(gpuCordonedNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(isUnschedulableAnnotationPresent(gpuCordonedNode)).To(Equal(false))
+			Expect(getNodeUpgradeState(dmInitialStateNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(isUnschedulableAnnotationPresent(dmInitialStateNode)).To(Equal(false))
 		})
 		It("UpgradeStateManager should move up-to-date nodes with safe driver loading annotation "+
 			"to UpgradeRequired state", func() {
@@ -606,7 +716,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				// Unlimited upgrades
 				MaxParallelUpgrades: 0,
 				// Unlimited unavailable
-				MaxUnavailable: &intstr.IntOrString{Type: intstr.String, StrVal: "100%"},
+				MaxUnavailable:    &intstr.IntOrString{Type: intstr.String, StrVal: "100%"},
+				SkipCordonedNodes: boolPtr(false),
 			}
 
 			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
@@ -635,6 +746,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 				// Unlimited upgrades
 				MaxParallelUpgrades: 0,
 				MaxUnavailable:      &intstr.IntOrString{Type: intstr.String, StrVal: "50%"},
+				SkipCordonedNodes:   boolPtr(false),
 			}
 
 			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
@@ -1992,6 +2104,10 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	})
 
 })
+
+func boolPtr(v bool) *bool {
+	return &v
+}
 
 func nodeWithUpgradeState(state string) *corev1.Node {
 	return &corev1.Node{
