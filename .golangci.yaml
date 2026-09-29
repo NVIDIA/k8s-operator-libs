@@ -38,6 +38,7 @@ linters:
     - maintidx
     - makezero
     - misspell
+    - modernize
     - nakedret
     - nilerr
     - nilnil
