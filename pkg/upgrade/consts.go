@@ -47,6 +47,13 @@ const (
 	// UpgradeRequestorModeAnnotationKeyFmt is the format of the node annotation indicating requestor driver upgrade
 	// mode is used for underlying node
 	UpgradeRequestorModeAnnotationKeyFmt = "nvidia.com/%s-driver-upgrade-requestor-mode"
+	// DriverManagerCordonClaimAnnotation is the driver-manager's cordon ownership claim.
+	DriverManagerCordonClaimAnnotation = "nvidia.com/gpu-driver-manager.node-cordoned"
+	// DriverManagerInitialUnschedulableAnnotation is written by k8s-driver-manager when it records a cordon.
+	// Presence means driver-manager owns the cordon; the value is the prior unschedulable state, not a flag.
+	DriverManagerInitialUnschedulableAnnotation = "nvidia.com/driver-manager.node-initial-state.unschedulable"
+	// UpgradeControllerCordonClaimAnnotation is the upgrade controller's cordon ownership claim.
+	UpgradeControllerCordonClaimAnnotation = "nvidia.com/gpu-driver-upgrade-controller.node-cordoned"
 	// UpgradeStateUnknown Node has this state when the upgrade flow is disabled or the node hasn't been processed yet
 	UpgradeStateUnknown = ""
 	// UpgradeStateUpgradeRequired is set when the driver pod on the node is not up-to-date and required upgrade

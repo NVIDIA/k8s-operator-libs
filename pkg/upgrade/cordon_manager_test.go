@@ -31,9 +31,55 @@ var _ = Describe("CordonManager tests", func() {
 		err := cordonManager.Cordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.UpgradeControllerCordonClaimAnnotation, "true"))
 
 		err = cordonManager.Uncordon(testCtx, node)
 		Expect(err).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeFalse())
+		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
+	})
+
+	It("CordonManager should preserve the driver-manager claim when releasing its own", func() {
+		node := NewNode("shared-cordon-node").
+			WithAnnotations(map[string]string{upgrade.DriverManagerCordonClaimAnnotation: "true"}).
+			Create()
+
+		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
+		Expect(cordonManager.Uncordon(testCtx, node)).To(Succeed())
+
+		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.DriverManagerCordonClaimAnnotation, "true"))
+		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
+	})
+
+	It("CordonManager should not claim a cordon recorded as external", func() {
+		node := NewNode("external-cordon-node").
+			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
+			Unschedulable(true).
+			Create()
+
+		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
+		Expect(cordonManager.Uncordon(testCtx, node)).To(Succeed())
+
+		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
+	})
+
+	It("CordonManager should preserve a driver-manager initial-state recording when releasing its own claim", func() {
+		node := NewNode("dm-initial-state-node").
+			WithAnnotations(map[string]string{upgrade.DriverManagerInitialUnschedulableAnnotation: "false"}).
+			Unschedulable(true).
+			Create()
+
+		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.UpgradeControllerCordonClaimAnnotation, "true"))
+		Expect(cordonManager.Uncordon(testCtx, node)).To(Succeed())
+
+		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.DriverManagerInitialUnschedulableAnnotation, "false"))
+		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
 	})
 })
