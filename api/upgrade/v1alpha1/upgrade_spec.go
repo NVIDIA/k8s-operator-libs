@@ -65,6 +65,17 @@ type WaitForCompletionSpec struct {
 
 // PodDeletionSpec describes configuration for deletion of pods using special resources during automatic upgrade
 type PodDeletionSpec struct {
+	// PodSelector specifies an additional label selector for pods to evict during
+	// the upgrade. It is OR'd with the pod deletion filter provided by the
+	// consumer: a pod is evicted if the filter selects it or it matches this
+	// selector. Use it to evict GPU consumers the filter does not select, for
+	// example pods that access the GPU through a runtime class without requesting
+	// a GPU resource. Only Running and Pending pods are matched. An empty or
+	// whitespace-only selector preserves the previous behavior.
+	// For more details on label selectors, see:
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+	// +optional
+	PodSelector string `json:"podSelector,omitempty"`
 	// Force indicates if force deletion is allowed
 	// +optional
 	// +kubebuilder:default:=false

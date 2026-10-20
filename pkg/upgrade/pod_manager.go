@@ -117,6 +117,37 @@ func (m *PodManagerImpl) GetDaemonsetControllerRevisionHash(ctx context.Context,
 	return hash, nil
 }
 
+// podEvictionPredicate builds the predicate that decides whether a pod must be
+// evicted during the upgrade. A pod is selected if the consumer-provided
+// podDeletionFilter selects it, or if it matches the optional additional label
+// selector from the spec. The additional selector lets callers evict GPU
+// consumers the filter does not catch, for example pods that access the GPU
+// through a runtime class without requesting a GPU resource. An empty selector
+// preserves the previous behavior.
+func (m *PodManagerImpl) podEvictionPredicate(
+	podDeletionSpec *v1alpha1.PodDeletionSpec) (func(corev1.Pod) bool, error) {
+	var additionalSelector labels.Selector
+	if trimmed := strings.TrimSpace(podDeletionSpec.PodSelector); trimmed != "" {
+		sel, err := labels.Parse(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pod deletion podSelector %q: %w", podDeletionSpec.PodSelector, err)
+		}
+		additionalSelector = sel
+	}
+
+	return func(pod corev1.Pod) bool {
+		if m.podDeletionFilter != nil && m.podDeletionFilter(pod) {
+			return true
+		}
+		if additionalSelector != nil &&
+			(pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending) &&
+			additionalSelector.Matches(labels.Set(pod.Labels)) {
+			return true
+		}
+		return false
+	}, nil
+}
+
 // SchedulePodEviction receives a config for pod eviction and deletes pods for each node in the list.
 // The set of pods to delete is determined by a filter that is provided to the PodManagerImpl during construction.
 func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodManagerConfig) error {
@@ -133,11 +164,19 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 		return fmt.Errorf("pod deletion spec should not be empty")
 	}
 
+	// shouldDelete reports whether a pod must be evicted during the upgrade. It
+	// is used both for the pre-count and for the drain helper filter so the two
+	// stay consistent (a mismatch between them is treated as "cannot delete all
+	// required pods").
+	shouldDelete, err := m.podEvictionPredicate(podDeletionSpec)
+	if err != nil {
+		return err
+	}
+
 	// Create a custom drain filter which will be passed to the drain helper.
 	// The drain helper will carry out the actual deletion of pods on a node.
 	customDrainFilter := func(pod corev1.Pod) drain.PodDeleteStatus {
-		deleteFunc := m.podDeletionFilter(pod)
-		if !deleteFunc {
+		if !shouldDelete(pod) {
 			return drain.MakePodDeleteStatusSkip()
 		}
 		return drain.MakePodDeleteStatusOkay()
@@ -173,10 +212,10 @@ func (m *PodManagerImpl) SchedulePodEviction(ctx context.Context, config *PodMan
 					return
 				}
 
-				// Get number of pods requiring deletion using the podDeletionFilter
+				// Get number of pods requiring deletion using the combined predicate
 				numPodsToDelete := 0
 				for _, pod := range podList.Items {
-					if m.podDeletionFilter(pod) {
+					if shouldDelete(pod) {
 						numPodsToDelete++
 					}
 				}
