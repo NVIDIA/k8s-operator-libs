@@ -42,7 +42,12 @@ type DriverUpgradePolicySpec struct {
 	// By default, a fixed value of 25% is used.
 	// +optional
 	// +kubebuilder:default:="25%"
-	MaxUnavailable    *intstr.IntOrString    `json:"maxUnavailable,omitempty"`
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+	// SkipCordonedNodes leaves already-unschedulable nodes untouched until they are uncordoned.
+	// Defaults to true. Skipped nodes still count towards MaxUnavailable.
+	// +optional
+	// +kubebuilder:default:=true
+	SkipCordonedNodes *bool                  `json:"skipCordonedNodes,omitempty"`
 	PodDeletion       *PodDeletionSpec       `json:"podDeletion,omitempty"`
 	WaitForCompletion *WaitForCompletionSpec `json:"waitForCompletion,omitempty"`
 	DrainSpec         *DrainSpec             `json:"drain,omitempty"`

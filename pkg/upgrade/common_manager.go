@@ -280,20 +280,7 @@ func (m *CommonUpgradeManagerImpl) ProcessDoneOrUnknownNodes(
 				"node", nodeState.Node.Name)
 		}
 		if (!isPodSynced && !isOrphaned) || isWaitingForSafeDriverLoad || isUpgradeRequested {
-			// If node requires upgrade and is Unschedulable, track this in an
-			// annotation and leave node in Unschedulable state when upgrade completes.
-			if IsNodeUnschedulable(nodeState.Node) {
-				annotationKey := GetUpgradeInitialStateAnnotationKey()
-				annotationValue := trueString
-				m.Log.V(consts.LogLevelInfo).Info(
-					"Node is unschedulable, adding annotation to track initial state of the node",
-					"node", nodeState.Node.Name, "annotation", annotationKey)
-				err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, nodeState.Node, annotationKey,
-					annotationValue)
-				if err != nil {
-					return err
-				}
-			}
+			// Record unschedulable state when the upgrade starts, not here, to avoid a stale annotation.
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateUpgradeRequired)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
@@ -697,6 +684,53 @@ func (m *CommonUpgradeManagerImpl) isNodeConditionReady(node *corev1.Node) bool 
 // skipNodeUpgrade returns true if node is labeled to skip driver upgrades
 func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
 	return node.Labels[GetUpgradeSkipNodeLabelKey()] == trueString
+}
+
+// SkipCordonedNode returns true if an already-cordoned node should be left in upgrade-required.
+func (m *CommonUpgradeManagerImpl) SkipCordonedNode(node *corev1.Node,
+	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) bool {
+	if upgradePolicy != nil && upgradePolicy.SkipCordonedNodes != nil && !*upgradePolicy.SkipCordonedNodes {
+		return false
+	}
+	if !node.Spec.Unschedulable {
+		return false
+	}
+	return !hasGPUCordonClaim(node)
+}
+
+// hasGPUCordonClaim reports whether the cordon is owned by the driver-manager or upgrade controller.
+func hasGPUCordonClaim(node *corev1.Node) bool {
+	_, dmInitialState := node.Annotations[DriverManagerInitialUnschedulableAnnotation]
+	return node.Annotations[DriverManagerCordonClaimAnnotation] == trueString ||
+		node.Annotations[UpgradeControllerCordonClaimAnnotation] == trueString ||
+		dmInitialState
+}
+
+// RecordInitialUnschedulableState records or clears the node's pre-upgrade unschedulable annotation
+// when its upgrade starts.
+func (m *CommonUpgradeManagerImpl) RecordInitialUnschedulableState(ctx context.Context,
+	node *corev1.Node) error {
+	annotationKey := GetUpgradeInitialStateAnnotationKey()
+	_, annotated := node.Annotations[annotationKey]
+
+	if IsNodeUnschedulable(node) {
+		// Do not record an operator-owned cordon as the node's pre-upgrade state.
+		if annotated || hasGPUCordonClaim(node) {
+			return nil
+		}
+		m.Log.V(consts.LogLevelInfo).Info(
+			"Node is unschedulable, adding annotation to track initial state of the node",
+			"node", node.Name, "annotation", annotationKey)
+		return m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, trueString)
+	}
+
+	if !annotated {
+		return nil
+	}
+	m.Log.V(consts.LogLevelInfo).Info(
+		"Node is no longer unschedulable, removing annotation tracking initial state of the node",
+		"node", node.Name, "annotation", annotationKey)
+	return m.NodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, nullString)
 }
 
 // updateNodeToUncordonOrDoneState skips moving the node to the UncordonRequired state if the node
