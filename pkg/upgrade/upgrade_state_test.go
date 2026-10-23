@@ -184,6 +184,207 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(upgradeState.NodeStates)).To(Equal(0))
+			Expect(upgradeState.UnaccountedNodes[ds.UID]).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesInProgress(upgradeState)).To(Equal(1))
+		})
+
+		It("should build state when a daemonset pod is misscheduled (desired below pod count)", func() {
+			// A NotReady node leaves DesiredNumberScheduled while its pod keeps running.
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(0).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+			Expect(upgradeState.TotalUnaccountedNodes()).To(Equal(0))
+		})
+
+		It("should build state when a daemonset pod is missing (desired above pod count)", func() {
+			// A deleted pod that the DaemonSet controller has not recreated yet.
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(2).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(1))
+			// The node without a pod is invisible, so it is held as in progress and unavailable.
+			Expect(upgradeState.UnaccountedNodes[ds.UID]).To(Equal(1))
+			Expect(upgradeState.DriverDaemonSets[ds.UID]).NotTo(BeNil())
+			Expect(stateManagerInterface.GetTotalManagedNodes(upgradeState)).To(Equal(2))
+			Expect(stateManagerInterface.GetUpgradesInProgress(upgradeState)).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesAvailable(upgradeState, 2, 2)).To(Equal(1))
+			// With maxUnavailable 1 the missing node already fills the unavailable budget.
+			Expect(stateManagerInterface.GetUpgradesAvailable(upgradeState, 2, 1)).To(Equal(0))
+		})
+
+		It("should count a missing node even when another node has a terminating pod and its replacement", func() {
+			selector := map[string]string{"foo": "bar"}
+			nodeA := createNode(fmt.Sprintf("node-a-%s", id))
+			_ = createNode(fmt.Sprintf("node-b-%s", id))
+			nodeC := createNode(fmt.Sprintf("node-c-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(3).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			owner := v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: ds.Name, UID: ds.UID}
+			old := NewPod(fmt.Sprintf("pod-a-old-%s", id), namespace.Name, nodeA.Name).
+				WithLabels(selector).WithOwnerReference(owner).WithFinalizers([]string{"test/hold"}).Create()
+			_ = NewPod(fmt.Sprintf("pod-a-new-%s", id), namespace.Name, nodeA.Name).
+				WithLabels(selector).WithOwnerReference(owner).Create()
+			_ = NewPod(fmt.Sprintf("pod-c-%s", id), namespace.Name, nodeC.Name).
+				WithLabels(selector).WithOwnerReference(owner).Create()
+			Expect(k8sClient.Delete(testCtx, old)).To(Succeed())
+
+			// Three pods for three desired, but node B has none: the deficit must be 1.
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(2))
+			Expect(upgradeState.UnaccountedNodes[ds.UID]).To(Equal(1))
+			Expect(stateManagerInterface.GetTotalManagedNodes(upgradeState)).To(Equal(3))
+			Expect(stateManagerInterface.GetUpgradesInProgress(upgradeState)).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesAvailable(upgradeState, 2, 3)).To(Equal(1))
+
+			current := &corev1.Pod{}
+			Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(old), current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			current.Finalizers = nil
+			Expect(k8sClient.Patch(testCtx, current, patch)).To(Succeed())
+		})
+
+		It("should not let a misscheduled pod cover a desired node that has no pod", func() {
+			// Node D is NotReady: its pod is misscheduled and it left the desired count.
+			// Node A's replacement pod is not bound yet. Node B is healthy.
+			selector := map[string]string{"foo": "bar"}
+			nodeB := createNode(fmt.Sprintf("node-b-%s", id))
+			nodeD := createNode(fmt.Sprintf("node-d-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(2).
+				WithNumberMisscheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			owner := v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: ds.Name, UID: ds.UID}
+			_ = NewPod(fmt.Sprintf("pod-b-%s", id), namespace.Name, nodeB.Name).WithLabels(selector).WithOwnerReference(owner).Create()
+			_ = NewPod(fmt.Sprintf("pod-d-%s", id), namespace.Name, nodeD.Name).WithLabels(selector).WithOwnerReference(owner).Create()
+			unbound := NewPod(fmt.Sprintf("pod-a-%s", id), namespace.Name, "").WithLabels(selector).WithOwnerReference(owner).Create()
+			unbound.Status.Phase = corev1.PodPending
+			Expect(updatePodStatus(unbound)).To(Succeed())
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(2))
+			Expect(upgradeState.UnaccountedNodes[ds.UID]).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesInProgress(upgradeState)).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesAvailable(upgradeState, 1, 3)).To(Equal(0))
+		})
+
+		It("should not reserve a slot for a node that still runs an orphaned pod", func() {
+			// Migration case: the orphan holds the node, the new DaemonSet's pod cannot bind
+			// until it is gone. The node is already in NodeStates through the orphan.
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			owner := v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: ds.Name, UID: ds.UID}
+			_ = NewPod(fmt.Sprintf("pod-orphan-%s", id), namespace.Name, node.Name).WithLabels(selector).Create()
+			unbound := NewPod(fmt.Sprintf("pod-new-%s", id), namespace.Name, "").WithLabels(selector).WithOwnerReference(owner).Create()
+			unbound.Status.Phase = corev1.PodPending
+			Expect(updatePodStatus(unbound)).To(Succeed())
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(1))
+			Expect(upgradeState.NodeStates[""][0].IsOrphanedPod()).To(BeTrue())
+			Expect(upgradeState.TotalUnaccountedNodes()).To(Equal(0))
+			Expect(stateManagerInterface.GetTotalManagedNodes(upgradeState)).To(Equal(1))
+			Expect(stateManagerInterface.GetUpgradesAvailable(upgradeState, 1, 1)).To(Equal(1))
+		})
+
+		It("should attribute missing nodes to their own DaemonSet", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			dsFull := NewDaemonSet(fmt.Sprintf("ds-full-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			dsShort := NewDaemonSet(fmt.Sprintf("ds-short-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(2).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: dsFull.Name, UID: dsFull.UID}).
+				Create()
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(upgradeState.UnaccountedNodes[dsFull.UID]).To(Equal(0))
+			Expect(upgradeState.UnaccountedNodes[dsShort.UID]).To(Equal(2))
+			Expect(upgradeState.TotalUnaccountedNodes()).To(Equal(2))
+			Expect(stateManagerInterface.GetTotalManagedNodes(upgradeState)).To(Equal(3))
+		})
+
+		It("should keep one state per node when a terminating pod and its replacement coexist", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			owner := v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: ds.Name, UID: ds.UID}
+			old := NewPod(fmt.Sprintf("pod-old-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(owner).
+				WithFinalizers([]string{"test/hold"}).
+				Create()
+			replacement := NewPod(fmt.Sprintf("pod-new-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(owner).
+				Create()
+			// The finalizer keeps the old pod around with a deletion timestamp.
+			Expect(k8sClient.Delete(testCtx, old)).To(Succeed())
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(1))
+			Expect(upgradeState.NodeStates[""][0].DriverPod.Name).To(Equal(replacement.Name))
+			Expect(upgradeState.TotalUnaccountedNodes()).To(Equal(0))
+			Expect(stateManagerInterface.GetTotalManagedNodes(upgradeState)).To(Equal(1))
+
+			// Release the finalizer so cleanup can remove the old pod.
+			current := &corev1.Pod{}
+			Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(old), current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			current.Finalizers = nil
+			Expect(k8sClient.Patch(testCtx, current, patch)).To(Succeed())
 		})
 
 		It("should process orphaned pods without error", func() {
