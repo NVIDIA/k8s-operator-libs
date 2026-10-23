@@ -305,6 +305,7 @@ type DaemonSet struct {
 	*appsv1.DaemonSet
 
 	desiredNumberScheduled int32
+	numberMisscheduled     int32
 }
 
 func NewDaemonSet(name, namespace string, selector map[string]string) DaemonSet {
@@ -328,11 +329,16 @@ func NewDaemonSet(name, namespace string, selector map[string]string) DaemonSet 
 			},
 		},
 	}
-	return DaemonSet{ds, 0}
+	return DaemonSet{DaemonSet: ds}
 }
 
 func (d DaemonSet) WithLabels(labels map[string]string) DaemonSet {
 	d.ObjectMeta.Labels = labels
+	return d
+}
+
+func (d DaemonSet) WithNumberMisscheduled(num int32) DaemonSet {
+	d.numberMisscheduled = num
 	return d
 }
 
@@ -348,6 +354,7 @@ func (d DaemonSet) Create() *appsv1.DaemonSet {
 
 	// set Pod in Running state and mark Container as Ready
 	ds.Status.DesiredNumberScheduled = d.desiredNumberScheduled
+	ds.Status.NumberMisscheduled = d.numberMisscheduled
 	err = k8sClient.Status().Update(context.TODO(), ds)
 	Expect(err).NotTo(HaveOccurred())
 	createdObjects = append(createdObjects, ds)
@@ -408,12 +415,32 @@ func (p Pod) WithResource(name, quantity string) Pod {
 	return p
 }
 
+func (p Pod) WithFinalizers(finalizers []string) Pod {
+	p.Finalizers = finalizers
+	return p
+}
+
 func (p Pod) WithOwnerReference(ownerRef metav1.OwnerReference) Pod {
 	if ownerRef.Controller == nil {
 		controller := true
 		ownerRef.Controller = &controller
 	}
 	p.OwnerReferences = append(p.OwnerReferences, ownerRef)
+	return p
+}
+
+func (p Pod) WithDaemonSetNodeAffinity(nodeName string) Pod {
+	p.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+				MatchFields: []corev1.NodeSelectorRequirement{{
+					Key:      metav1.ObjectNameField,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{nodeName},
+				}},
+			}},
+		},
+	}}
 	return p
 }
 
