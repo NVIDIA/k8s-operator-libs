@@ -61,6 +61,9 @@ type NodeUpgradeState struct {
 	DriverPod       *corev1.Pod
 	DriverDaemonSet *appsv1.DaemonSet
 	NodeMaintenance client.Object
+	// DriverDaemonSetRevisionHash is the DaemonSet's current controller revision hash, read
+	// once per DaemonSet when the state was built. Empty when unknown.
+	DriverDaemonSetRevisionHash string
 }
 
 // IsOrphanedPod returns true if Pod is not associated to a DaemonSet
@@ -340,11 +343,14 @@ func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context,
 		return isPodSynced, isOrphened, err
 	}
 	m.Log.V(consts.LogLevelDebug).Info("pod template revision hash", "hash", podRevisionHash)
-	daemonsetRevisionHash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
-	if err != nil {
-		m.Log.V(consts.LogLevelError).Error(
-			err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
-		return isPodSynced, isOrphened, err
+	daemonsetRevisionHash := nodeState.DriverDaemonSetRevisionHash
+	if daemonsetRevisionHash == "" {
+		daemonsetRevisionHash, err = m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
+		if err != nil {
+			m.Log.V(consts.LogLevelError).Error(
+				err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
+			return isPodSynced, isOrphened, err
+		}
 	}
 	m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
 	isPodSynced = podRevisionHash == daemonsetRevisionHash

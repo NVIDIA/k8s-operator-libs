@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -140,6 +141,33 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	// Collect also orphaned driver pods
 	filteredPodList = append(filteredPodList, podsByOwner[NoOwner]...)
 
+	// Read every node once and each DaemonSet's revision hash once. Per-pod lookups cost
+	// one API round trip each, which at thousands of nodes dominates the pass.
+	nodeList := &corev1.NodeList{}
+	if err := m.K8sClient.List(ctx, nodeList); err != nil {
+		return nil, err
+	}
+	nodesByName := make(map[string]*corev1.Node, len(nodeList.Items))
+	for i := range nodeList.Items {
+		nodesByName[nodeList.Items[i].Name] = &nodeList.Items[i]
+	}
+	// Only DaemonSets that have pods need a hash. A new DaemonSet with no pods has no
+	// ControllerRevision yet, and it must not fail the pass as it never did before. If
+	// the lookup fails, leave the hash empty and let podInSyncWithDS fall back.
+	revisionByDS := make(map[types.UID]string, len(daemonSets))
+	for uid, ds := range daemonSets {
+		if len(podsByOwner[uid]) == 0 {
+			continue
+		}
+		hash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, ds)
+		if err != nil {
+			m.Log.V(consts.LogLevelInfo).Info("Could not read DaemonSet revision hash up front, will retry per pod",
+				"daemonset", ds.Name, "error", err.Error())
+			continue
+		}
+		revisionByDS[uid] = hash
+	}
+
 	upgradeStateLabel := GetUpgradeStateLabelKey()
 
 	for i := range filteredPodList {
@@ -154,10 +182,21 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
 			continue
 		}
-		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet)
+		// Nodes in a state serviced by an asynchronous worker (drain, wait-for-jobs) may be
+		// mid-transition. The worker holds the provider's per-node lock while it patches the
+		// state, so read those nodes through the provider to wait behind the update, as the
+		// per-node GET always did. Everything else comes from the single LIST.
+		listedNode := nodesByName[pod.Spec.NodeName]
+		if listedNode != nil && nodeStateHasAsyncWorker(listedNode.Labels[upgradeStateLabel]) {
+			listedNode = nil
+		}
+		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet, listedNode)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod)
 			return nil, err
+		}
+		if ownerDaemonSet != nil {
+			nodeState.DriverDaemonSetRevisionHash = revisionByDS[ownerDaemonSet.UID]
 		}
 		nodeStateLabel := nodeState.Node.Labels[upgradeStateLabel]
 		upgradeState.NodeStates[nodeStateLabel] = append(
@@ -165,6 +204,20 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	}
 
 	return &upgradeState, nil
+}
+
+// nodeStateHasAsyncWorker reports whether a goroutine outside the reconcile pass may be
+// changing a node in this state. The drain manager (drain-required) and the pod eviction
+// worker (pod-deletion-required) run per-node goroutines guarded by an in-memory set that is
+// cleared only after the state patch lands. The job-completion watcher (wait-for-jobs)
+// normally joins its goroutines, but an error listing pods for a later node returns before
+// that join and leaves already started workers running, so it is listed as well.
+func nodeStateHasAsyncWorker(state string) bool {
+	switch state {
+	case UpgradeStateDrainRequired, UpgradeStatePodDeletionRequired, UpgradeStateWaitForJobsRequired:
+		return true
+	}
+	return false
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
@@ -364,11 +417,14 @@ func (m *ClusterUpgradeStateManagerImpl) WithRestartOnlyPredicate(
 // buildNodeUpgradeState creates a mapping between a node,
 // the driver POD running on them and the daemon set, controlling this pod
 func (m *ClusterUpgradeStateManagerImpl) buildNodeUpgradeState(
-	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet) (*NodeUpgradeState, error) {
+	ctx context.Context, pod *corev1.Pod, ds *appsv1.DaemonSet, node *corev1.Node) (*NodeUpgradeState, error) {
 	var nm client.Object
-	node, err := m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
+	var err error
+	if node == nil {
+		node, err = m.NodeUpgradeStateProvider.GetNode(ctx, pod.Spec.NodeName)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get node %s: %v", pod.Spec.NodeName, err)
+		}
 	}
 
 	if m.opts.Requestor.UseMaintenanceOperator {

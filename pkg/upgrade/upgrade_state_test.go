@@ -186,6 +186,60 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(len(upgradeState.NodeStates)).To(Equal(0))
 		})
 
+		It("should record each DaemonSet's revision hash on its node states", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(1))
+			nodeState := upgradeState.NodeStates[""][0]
+			Expect(nodeState.Node.Name).To(Equal(node.Name))
+			expected, err := podManager.GetDaemonsetControllerRevisionHash(testCtx, ds)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(nodeState.DriverDaemonSetRevisionHash).To(Equal(expected))
+		})
+
+		It("should not look up the revision of a DaemonSet that has no pods", func() {
+			// A newly created DaemonSet has no pods and no ControllerRevision yet. It must not
+			// cost a lookup and must not fail the pass.
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			empty := NewDaemonSet(fmt.Sprintf("ds-empty-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(0).
+				WithLabels(map[string]string{"foo": "bar"}).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: ds.Name, UID: ds.UID}).
+				Create()
+
+			upgradeState, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates[""])).To(Equal(1))
+			podManager.AssertNotCalled(GinkgoT(), "GetDaemonsetControllerRevisionHash", mock.Anything,
+				mock.MatchedBy(func(d *appsv1.DaemonSet) bool { return d.UID == empty.UID }))
+			podManager.AssertCalled(GinkgoT(), "GetDaemonsetControllerRevisionHash", mock.Anything,
+				mock.MatchedBy(func(d *appsv1.DaemonSet) bool { return d.UID == ds.UID }))
+		})
+
 		It("should process orphaned pods without error", func() {
 			selector := map[string]string{"foo": "bar"}
 			node := createNode(fmt.Sprintf("node-%s", id))
