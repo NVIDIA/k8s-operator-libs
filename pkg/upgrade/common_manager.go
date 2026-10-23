@@ -73,11 +73,30 @@ func (nus *NodeUpgradeState) IsOrphanedPod() bool {
 // This state is then used as an input for the ClusterUpgradeStateManager
 type ClusterUpgradeState struct {
 	NodeStates map[string][]*NodeUpgradeState
+	// UnaccountedNodes counts, per driver DaemonSet UID, desired nodes with no bound pod.
+	// They are invisible to NodeStates and are counted as in progress and unavailable.
+	UnaccountedNodes map[types.UID]int
+	// DriverDaemonSets indexes the driver DaemonSets by UID, so consumers that partition
+	// the state by owner can carry UnaccountedNodes along.
+	DriverDaemonSets map[types.UID]*appsv1.DaemonSet
 }
 
 // NewClusterUpgradeState creates an empty ClusterUpgradeState object
 func NewClusterUpgradeState() ClusterUpgradeState {
-	return ClusterUpgradeState{NodeStates: make(map[string][]*NodeUpgradeState)}
+	return ClusterUpgradeState{
+		NodeStates:       make(map[string][]*NodeUpgradeState),
+		UnaccountedNodes: make(map[types.UID]int),
+		DriverDaemonSets: make(map[types.UID]*appsv1.DaemonSet),
+	}
+}
+
+// TotalUnaccountedNodes sums UnaccountedNodes across all driver DaemonSets.
+func (s *ClusterUpgradeState) TotalUnaccountedNodes() int {
+	total := 0
+	for _, n := range s.UnaccountedNodes {
+		total += n
+	}
+	return total
 }
 
 // RestartOnlyPredicate is used for a node whose driver pod is out-of-sync with its
@@ -175,6 +194,8 @@ func (m *CommonUpgradeManagerImpl) GetCurrentUnavailableNodes(
 			}
 		}
 	}
+	// Nodes with no bound pod are mid-restart or joining; reserve their unavailable slot.
+	unavailableNodes += currentState.TotalUnaccountedNodes()
 	return unavailableNodes
 }
 
@@ -756,7 +777,8 @@ func (m *CommonUpgradeManagerImpl) GetTotalManagedNodes(
 		len(currentState.NodeStates[UpgradeStateDrainRequired]) +
 		len(currentState.NodeStates[UpgradeStatePodRestartRequired]) +
 		len(currentState.NodeStates[UpgradeStateUncordonRequired]) +
-		len(currentState.NodeStates[UpgradeStateValidationRequired])
+		len(currentState.NodeStates[UpgradeStateValidationRequired]) +
+		currentState.TotalUnaccountedNodes()
 
 	return totalNodes
 }

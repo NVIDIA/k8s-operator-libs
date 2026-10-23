@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,6 +48,7 @@ type ClusterUpgradeStateManager interface {
 	// BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
 	BuildState(ctx context.Context, namespace string,
 		driverLabels map[string]string) (*ClusterUpgradeState, error)
+
 	// ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
 	// Based on the current state of the node, it is calculated if the node can be moved to the next state right now
 	// or whether any actions need to be scheduled for the node to move to the next state.
@@ -130,26 +132,32 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	filteredPodList := []corev1.Pod{}
 	for _, ds := range daemonSets {
 		dsPods := podsByOwner[ds.UID]
-		if int(ds.Status.DesiredNumberScheduled) != len(dsPods) {
-			m.Log.V(consts.LogLevelInfo).Info("Driver DaemonSet has Unscheduled pods", "name", ds.Name)
-			return nil, fmt.Errorf("driver DaemonSet should not have Unscheduled pods")
+		upgradeState.DriverDaemonSets[ds.UID] = ds
+		if missing := m.unaccountedNodesForDaemonSet(ds, dsPods); missing > 0 {
+			upgradeState.UnaccountedNodes[ds.UID] = missing
 		}
 		filteredPodList = append(filteredPodList, dsPods...)
 	}
 
 	// Collect also orphaned driver pods
 	filteredPodList = append(filteredPodList, podsByOwner[NoOwner]...)
+	releaseOrphanHeldReservations(&upgradeState, podsByOwner[NoOwner], filteredPodList)
+
+	podsByNode := m.pickPodPerNode(filteredPodList)
 
 	upgradeStateLabel := GetUpgradeStateLabelKey()
 
 	for i := range filteredPodList {
 		pod := &filteredPodList[i]
+		if pod.Spec.NodeName != "" && podsByNode[pod.Spec.NodeName] != i {
+			continue
+		}
 		var ownerDaemonSet *appsv1.DaemonSet
 		owner := metav1.GetControllerOfNoCopy(pod)
 		if owner != nil {
 			ownerDaemonSet = daemonSets[owner.UID]
 		}
-		// Check if pod is already scheduled to a Node
+		// Unbound pods are already covered by UnaccountedNodes.
 		if pod.Spec.NodeName == "" && pod.Status.Phase == corev1.PodPending {
 			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
 			continue
@@ -165,6 +173,78 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 	}
 
 	return &upgradeState, nil
+}
+
+// unaccountedNodesForDaemonSet returns how many desired nodes have no pod bound to them.
+// Distinct nodes are counted, not pods, and misscheduled pods cover no desired slot.
+func (m *ClusterUpgradeStateManagerImpl) unaccountedNodesForDaemonSet(ds *appsv1.DaemonSet, dsPods []corev1.Pod) int {
+	boundNodes := make(map[string]struct{}, len(dsPods))
+	for i := range dsPods {
+		if dsPods[i].Spec.NodeName != "" {
+			boundNodes[dsPods[i].Spec.NodeName] = struct{}{}
+		}
+	}
+	covered := max(len(boundNodes)-int(ds.Status.NumberMisscheduled), 0)
+	if int(ds.Status.DesiredNumberScheduled) != len(dsPods) || len(boundNodes) != len(dsPods) {
+		m.Log.V(consts.LogLevelInfo).Info("Driver DaemonSet pod count differs from desired",
+			"name", ds.Name, "desired", ds.Status.DesiredNumberScheduled,
+			"pods", len(dsPods), "boundNodes", len(boundNodes),
+			"misscheduled", ds.Status.NumberMisscheduled)
+	}
+	return int(ds.Status.DesiredNumberScheduled) - covered
+}
+
+// releaseOrphanHeldReservations drops reservations for nodes an orphaned pod already
+// represents in NodeStates; the replacement cannot bind there until the orphan is gone.
+func releaseOrphanHeldReservations(state *ClusterUpgradeState, orphanPods []corev1.Pod, allPods []corev1.Pod) {
+	orphanNodes := make(map[string]struct{})
+	for i := range orphanPods {
+		if name := orphanPods[i].Spec.NodeName; name != "" {
+			orphanNodes[name] = struct{}{}
+		}
+	}
+	for i := range allPods {
+		if metav1.GetControllerOfNoCopy(&allPods[i]) != nil {
+			delete(orphanNodes, allPods[i].Spec.NodeName)
+		}
+	}
+	for range orphanNodes {
+		var largest types.UID
+		for uid, n := range state.UnaccountedNodes {
+			if n > state.UnaccountedNodes[largest] {
+				largest = uid
+			}
+		}
+		if state.UnaccountedNodes[largest] == 0 {
+			return
+		}
+		state.UnaccountedNodes[largest]--
+		if state.UnaccountedNodes[largest] == 0 {
+			delete(state.UnaccountedNodes, largest)
+		}
+	}
+}
+
+// pickPodPerNode returns one pod index per node, preferring a pod that is not terminating.
+func (m *ClusterUpgradeStateManagerImpl) pickPodPerNode(pods []corev1.Pod) map[string]int {
+	podsByNode := make(map[string]int, len(pods))
+	for i := range pods {
+		pod := &pods[i]
+		if pod.Spec.NodeName == "" {
+			continue
+		}
+		if j, seen := podsByNode[pod.Spec.NodeName]; seen {
+			other := &pods[j]
+			if pod.DeletionTimestamp.IsZero() && !other.DeletionTimestamp.IsZero() {
+				podsByNode[pod.Spec.NodeName] = i
+			}
+			m.Log.V(consts.LogLevelInfo).Info("Node has more than one driver pod, keeping one",
+				"node", pod.Spec.NodeName, "pod", pod.Name, "otherPod", other.Name)
+			continue
+		}
+		podsByNode[pod.Spec.NodeName] = i
+	}
+	return podsByNode
 }
 
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
