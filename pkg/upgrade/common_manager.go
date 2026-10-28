@@ -119,9 +119,23 @@ func NewCommonUpgradeStateManager(
 	k8sConfig *rest.Config,
 	scheme *runtime.Scheme,
 	eventRecorder record.EventRecorder) (*CommonUpgradeManagerImpl, error) {
-	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
-	if err != nil {
-		return &CommonUpgradeManagerImpl{}, fmt.Errorf("error creating k8s client: %v", err)
+	return newCommonUpgradeStateManager(log, k8sConfig, scheme, eventRecorder, nil)
+}
+
+// newCommonUpgradeStateManager creates a new instance of CommonUpgradeManagerImpl that uses
+// k8sClient, or a new uncached client when k8sClient is nil.
+func newCommonUpgradeStateManager(
+	log logr.Logger,
+	k8sConfig *rest.Config,
+	scheme *runtime.Scheme,
+	eventRecorder record.EventRecorder,
+	k8sClient client.Client) (*CommonUpgradeManagerImpl, error) {
+	if k8sClient == nil {
+		var err error
+		k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme})
+		if err != nil {
+			return &CommonUpgradeManagerImpl{}, fmt.Errorf("error creating k8s client: %w", err)
+		}
 	}
 
 	k8sInterface, err := kubernetes.NewForConfig(k8sConfig)

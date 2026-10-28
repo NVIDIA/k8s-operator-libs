@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -197,6 +198,52 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(upgradeState.NodeStates)).To(Equal(1))
 			Expect(upgradeState.NodeStates[""][0].IsOrphanedPod()).To(BeTrue())
+		})
+
+		It("should read through the client passed in StateOptions", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(selector).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			c, err := client.NewWithWatch(k8sConfig, client.Options{Scheme: upgrade.Scheme})
+			Expect(err).NotTo(HaveOccurred())
+			reads := map[string]int{}
+			countingClient := interceptor.NewClient(c, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+					opts ...client.GetOption) error {
+					reads[fmt.Sprintf("%T", obj)]++
+					return c.Get(ctx, key, obj, opts...)
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList,
+					opts ...client.ListOption) error {
+					reads[fmt.Sprintf("%T", list)]++
+					return c.List(ctx, list, opts...)
+				},
+			})
+			manager, err := upgrade.NewClusterUpgradeStateManager(log, k8sConfig, eventRecorder,
+				upgrade.StateOptions{Client: countingClient})
+			Expect(err).NotTo(HaveOccurred())
+
+			upgradeState, err := manager.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+			Expect(reads).To(Equal(map[string]int{
+				"*v1.DaemonSetList": 1,
+				"*v1.PodList":       1,
+				"*v1.Node":          1,
+			}))
 		})
 	})
 

@@ -71,7 +71,7 @@ func NewClusterUpgradeStateManager(
 	k8sConfig *rest.Config,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
+	commonmanager, err := newCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder, opts.Client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
@@ -97,6 +97,9 @@ func NewClusterUpgradeStateManager(
 
 type StateOptions struct {
 	Requestor RequestorOptions
+	// Client is a cached client used for all controller-runtime reads and writes.
+	// When nil, an uncached client is created from the REST config.
+	Client client.Client
 }
 
 // BuildState builds a point-in-time snapshot of the driver upgrade state in the cluster.
