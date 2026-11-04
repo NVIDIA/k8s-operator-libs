@@ -110,6 +110,10 @@ type CommonUpgradeManagerImpl struct {
 	validationStateEnabled  bool
 	// optional: when set, route immaterial pod-template changes to a restart-only path
 	restartOnlyPredicate RestartOnlyPredicate
+	// maxParallelUpgrades is the driver pod deletion budget for the current upgrade pass,
+	// set by ApplyState from the upgrade policy; 0 means unlimited.
+	// Not synchronized: a manager instance must not run two reconciles concurrently.
+	maxParallelUpgrades int
 }
 
 // NewCommonUpgradeStateManager creates a new instance of CommonUpgradeManagerImpl
@@ -465,14 +469,36 @@ func (m *CommonUpgradeManagerImpl) ProcessPodDeletionRequiredNodes(
 	return m.PodManager.SchedulePodEviction(ctx, &podManagerConfig)
 }
 
+// deletionSlots returns how many driver pods may be deleted in this upgrade pass.
+// Pods that are already terminating occupy a slot, so repeated reconciles cannot
+// exceed maxParallelUpgrades concurrent restarts. A negative value means unlimited.
+func (m *CommonUpgradeManagerImpl) deletionSlots(nodes []*NodeUpgradeState) int {
+	if m.maxParallelUpgrades <= 0 {
+		return -1
+	}
+	restarting := 0
+	for _, nodeState := range nodes {
+		if nodeState.DriverPod != nil && !nodeState.DriverPod.DeletionTimestamp.IsZero() {
+			restarting++
+		}
+	}
+	return max(m.maxParallelUpgrades-restarting, 0)
+}
+
 // ProcessPodRestartNodes processes UpgradeStatePodRestartRequired nodes and schedules driver pod restart for them.
 // If the pod has already been restarted and is in Ready state - moves the node to UpgradeStateUncordonRequired state.
 func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
-	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes")
+	nodes := currentClusterState.NodeStates[UpgradeStatePodRestartRequired]
+	slots := m.deletionSlots(nodes)
+	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes",
+		"nodesInState", len(nodes),
+		"deletionSlots", slots,
+		"maxParallelUpgrades", m.maxParallelUpgrades)
 
-	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
-	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
+	pods := make([]*corev1.Pod, 0, len(nodes))
+	throttled := 0
+	for _, nodeState := range nodes {
 		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
@@ -483,6 +509,15 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 			// To determinate terminating state we need to check for deletion timestamp which will be set
 			// once pod termination process started
 			if nodeState.DriverPod.DeletionTimestamp.IsZero() {
+				if slots == 0 {
+					throttled++
+					m.Log.V(consts.LogLevelDebug).Info(
+						"Driver pod deletion waits for a free upgrade slot", "node", nodeState.Node.Name)
+					continue
+				}
+				if slots > 0 {
+					slots--
+				}
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
@@ -530,6 +565,13 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 				}
 			}
 		}
+	}
+
+	if throttled > 0 {
+		m.Log.V(consts.LogLevelInfo).Info("Driver pod deletions throttled by maxParallelUpgrades",
+			"skippedNodes", throttled,
+			"scheduledDeletions", len(pods),
+			"maxParallelUpgrades", m.maxParallelUpgrades)
 	}
 
 	// Create pod restart manager to handle pod restarts
