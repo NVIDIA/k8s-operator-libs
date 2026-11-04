@@ -110,6 +110,10 @@ type CommonUpgradeManagerImpl struct {
 	validationStateEnabled  bool
 	// optional: when set, route immaterial pod-template changes to a restart-only path
 	restartOnlyPredicate RestartOnlyPredicate
+	// Track driver pod deletions within current reconcile to enforce rate limit
+	// Reset at start of each reconcile loop
+	driverPodDeletionsInReconcile int
+	maxParallelUpgrades           int
 }
 
 // NewCommonUpgradeStateManager creates a new instance of CommonUpgradeManagerImpl
@@ -469,7 +473,9 @@ func (m *CommonUpgradeManagerImpl) ProcessPodDeletionRequiredNodes(
 // If the pod has already been restarted and is in Ready state - moves the node to UpgradeStateUncordonRequired state.
 func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
-	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes")
+	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes",
+		"nodesInState", len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]),
+		"deletionsInReconcile", m.driverPodDeletionsInReconcile)
 
 	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
@@ -479,6 +485,13 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 			return err
 		}
 		if !isPodSynced || isOrphaned {
+			// Check rate limit before scheduling pod deletion
+			if !m.CanDeleteDriverPod(nodeState.Node.Name) {
+				m.Log.V(consts.LogLevelInfo).Info("Skipping driver pod deletion due to rate limit",
+					"node", nodeState.Node.Name)
+				continue
+			}
+
 			// Pods should only be scheduled for restart if they are not terminating or restarting already
 			// To determinate terminating state we need to check for deletion timestamp which will be set
 			// once pod termination process started
@@ -760,6 +773,12 @@ func (m *CommonUpgradeManagerImpl) GetUpgradesDone(
 // GetUpgradesAvailable returns count of nodes on which upgrade can be done
 func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(
 	currentState *ClusterUpgradeState, maxParallelUpgrades int, maxUnavailable int) int {
+	// Store maxParallelUpgrades for later rate-limit checks
+	m.maxParallelUpgrades = maxParallelUpgrades
+	// Reset per-reconcile deletion counter at the start of availability calculation
+	// This ensures we track deletions only within current reconciliation loop
+	m.driverPodDeletionsInReconcile = 0
+
 	upgradesInProgress := m.GetUpgradesInProgress(currentState)
 	totalNodes := m.GetTotalManagedNodes(currentState)
 
@@ -786,6 +805,28 @@ func (m *CommonUpgradeManagerImpl) GetUpgradesAvailable(
 		upgradesAvailable = maxUnavailable - currentUnavailableNodes
 	}
 	return upgradesAvailable
+}
+
+// CanDeleteDriverPod checks if driver pod deletion is allowed based on rate limit
+// This prevents burst deletions when processing nodes in intermediate states after restart
+func (m *CommonUpgradeManagerImpl) CanDeleteDriverPod(nodeName string) bool {
+	// maxParallelUpgrades=0 means unlimited
+	if m.maxParallelUpgrades == 0 {
+		m.Log.V(consts.LogLevelDebug).Info("Driver pod deletion allowed (unlimited mode)",
+			"node", nodeName)
+		return true
+	}
+
+	if m.driverPodDeletionsInReconcile >= m.maxParallelUpgrades {
+		m.Log.V(consts.LogLevelInfo).Info("Driver pod deletion rate limit reached, skipping",
+			"node", nodeName,
+			"deletionsInReconcile", m.driverPodDeletionsInReconcile,
+			"maxParallelUpgrades", m.maxParallelUpgrades)
+		return false
+	}
+
+	m.driverPodDeletionsInReconcile++
+	return true
 }
 
 // GetUpgradesFailed returns count of nodes on which upgrades have failed
