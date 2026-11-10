@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -71,7 +72,7 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		id = randSeq(5)
 		opts := upgrade.StateOptions{}
 		// Create new ClusterUpgradeStateManagerImpl using mocked managers initialized in BeforeSuite()
-		stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig,
+		stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig, k8sClient,
 			eventRecorder, opts)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -239,6 +240,54 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(k8sClient.Status().Update(testCtx, selected)).To(Succeed())
 			_, err = stateManagerInterface.BuildState(testCtx, namespace.Name, selector, keepSelected)
 			Expect(err).To(MatchError("driver DaemonSet should not have Unscheduled pods"))
+		})
+
+		It("should read through the client passed to the constructor", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			ds := NewDaemonSet(fmt.Sprintf("ds-%s", id), namespace.Name, selector).
+				WithDesiredNumberScheduled(1).
+				WithLabels(selector).
+				Create()
+			_ = NewPod(fmt.Sprintf("pod-%s", id), namespace.Name, node.Name).
+				WithLabels(selector).
+				WithOwnerReference(v1.OwnerReference{
+					APIVersion: "apps/v1",
+					Kind:       "DaemonSet",
+					Name:       ds.Name,
+					UID:        ds.UID,
+				}).
+				Create()
+
+			c, err := client.NewWithWatch(k8sConfig, client.Options{Scheme: upgrade.Scheme})
+			Expect(err).NotTo(HaveOccurred())
+			reads := map[string]int{}
+			countingClient := interceptor.NewClient(c, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+					opts ...client.GetOption) error {
+					reads[fmt.Sprintf("%T", obj)]++
+					return c.Get(ctx, key, obj, opts...)
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList,
+					opts ...client.ListOption) error {
+					reads[fmt.Sprintf("%T", list)]++
+					return c.List(ctx, list, opts...)
+				},
+			})
+			manager, err := upgrade.NewClusterUpgradeStateManager(log, k8sConfig, countingClient,
+				eventRecorder, upgrade.StateOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			upgradeState, err := manager.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(upgradeState.NodeStates)).To(Equal(1))
+			Expect(reads).To(HaveKeyWithValue("*v1.DaemonSetList", BeNumerically(">", 0)))
+			Expect(reads).To(HaveKeyWithValue("*v1.PodList", BeNumerically(">", 0)))
+			Expect(reads).To(HaveKeyWithValue("*v1.Node", BeNumerically(">", 0)))
+		})
+		It("should return an error when the client is nil", func() {
+			_, err := upgrade.NewClusterUpgradeStateManager(log, k8sConfig, nil, eventRecorder, upgrade.StateOptions{})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 
@@ -1759,6 +1808,83 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 	})
 
+	It("UpgradeStateManager should retry when the client does not show an existing nodeMaintenance "+
+		"while using upgrade requestor mode and shared-requestor flow", func() {
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		withUpgradeRequestorMode(testCtx, namespace, false)
+		testRequestorID = SecondaryTestRequestorID
+		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateUpgradeRequired, namespace, nil, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		By("a stale read does not show the nodeMaintenance of the other requestor")
+		nodeState := clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired][0]
+		nm := nodeState.NodeMaintenance
+		nodeState.NodeMaintenance = nil
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).NotTo(Succeed())
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+
+		By("the next pass reads the nodeMaintenance and adds the requestor")
+		nodeState.NodeMaintenance = nm
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		updated := &maintenancev1alpha1.NodeMaintenance{}
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(nm), updated)).To(Succeed())
+		Expect(updated.Spec.AdditionalRequestors).To(ContainElement(PrimaryTestRequestorID))
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(
+			Equal(upgrade.UpgradeStateNodeMaintenanceRequired))
+	})
+
+	It("UpgradeStateManager should move node to 'upgrade-required' when the requestor is not in the "+
+		"nodeMaintenance while using upgrade requestor mode and shared-requestor flow", func() {
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		withUpgradeRequestorMode(testCtx, namespace, false)
+		testRequestorID = SecondaryTestRequestorID
+		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateNodeMaintenanceRequired, namespace, nil, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		nodeState := clusterState.NodeStates[upgrade.UpgradeStateNodeMaintenanceRequired][0]
+		nm, ok := nodeState.NodeMaintenance.(*maintenancev1alpha1.NodeMaintenance)
+		Expect(ok).To(BeTrue())
+		nm.Status.Conditions = []v1.Condition{{
+			Type:               maintenancev1alpha1.ConditionTypeReady,
+			Status:             v1.ConditionTrue,
+			Reason:             maintenancev1alpha1.ConditionReasonReady,
+			Message:            "Maintenance completed successfully",
+			LastTransitionTime: v1.NewTime(time.Now()),
+		}}
+		Expect(k8sClient.Status().Update(testCtx, nm)).To(Succeed())
+
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+	})
+
+	It("UpgradeStateManager should reuse an owned nodeMaintenance with a custom prefix "+
+		"while using upgrade requestor mode", func() {
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		withUpgradeRequestorMode(testCtx, namespace, true)
+		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateUpgradeRequired, namespace, nil, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		nodeState := clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired][0]
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(
+			Equal(upgrade.UpgradeStateNodeMaintenanceRequired))
+	})
+
 	It("UpgradeStateManager continue inplace upgrade logic, move to 'wait-for-jobs-required' "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
@@ -1945,6 +2071,41 @@ var _ = Describe("UpgradeStateManager tests", func() {
 		Expect(len(nms.Items)).To(Equal(len(clusterState.NodeStates[upgrade.UpgradeStateUncordonRequired])))
 	})
 
+	It("UpgradeStateManager should keep a node in 'uncordon-required' until the requestor is removed "+
+		"from a shared nodeMaintenance while using upgrade requestor mode", func() {
+		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
+		withUpgradeRequestorMode(testCtx, namespace, false)
+		testRequestorID = SecondaryTestRequestorID
+		clusterState := withClusterUpgradeState(1, upgrade.UpgradeStateUncordonRequired, namespace,
+			map[string]string{upgrade.GetUpgradeRequestorModeAnnotationKey(): "true"}, true)
+		policy := &v1alpha1.DriverUpgradePolicySpec{
+			AutoUpgrade: true,
+			DrainSpec: &v1alpha1.DrainSpec{
+				Enable: true,
+			},
+		}
+
+		nodeState := clusterState.NodeStates[upgrade.UpgradeStateUncordonRequired][0]
+		nm := &maintenancev1alpha1.NodeMaintenance{}
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(nodeState.NodeMaintenance), nm)).To(Succeed())
+		nm.Spec.AdditionalRequestors = []string{PrimaryTestRequestorID}
+		Expect(k8sClient.Update(testCtx, nm)).To(Succeed())
+		// Another requestor changes the object after the pass read it, so the release patch gets a conflict.
+		nodeState.NodeMaintenance = nm.DeepCopy()
+		nm.Spec.AdditionalRequestors = append(nm.Spec.AdditionalRequestors, "other.requestor.com")
+		Expect(k8sClient.Update(testCtx, nm)).To(Succeed())
+
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).NotTo(Succeed())
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(Equal(upgrade.UpgradeStateUncordonRequired))
+
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(nm), nm)).To(Succeed())
+		nodeState.NodeMaintenance = nm
+		Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+		Expect(getNodeUpgradeState(getNode(nodeState.Node.Name))).To(Equal(upgrade.UpgradeStateDone))
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(nm), nm)).To(Succeed())
+		Expect(nm.Spec.AdditionalRequestors).To(Equal([]string{"other.requestor.com"}))
+	})
+
 	It("UpgradeStateManager should move outdated node to UpgradeRequired states with orphaned pod if 'upgrade-requested' "+
 		"while using upgrade requestor mode", func() {
 		namespace := createNamespace(fmt.Sprintf("namespace-%s", id)).Name
@@ -2101,7 +2262,7 @@ func withUpgradeRequestorMode(testCtx context.Context, namespace string, useCust
 
 	opts.Requestor = upgrade.GetRequestorOptsFromEnvs()
 
-	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig,
+	stateManagerInterface, err = upgrade.NewClusterUpgradeStateManager(log, k8sConfig, k8sClient,
 		eventRecorder, upgrade.StateOptions{Requestor: opts.Requestor})
 	Expect(err).NotTo(HaveOccurred())
 
