@@ -65,13 +65,16 @@ type ClusterUpgradeStateManagerImpl struct {
 	opts      StateOptions
 }
 
-// NewClusterUpgradeStateManager creates a new instance of ClusterUpgradeStateManagerImpl
+// NewClusterUpgradeStateManager creates a new instance of ClusterUpgradeStateManagerImpl.
+// k8sClient is used for all controller-runtime reads and writes, and can be a cached client.
+// Cache transforms need to preserve Node Spec.Unschedulable and the Ready condition.
 func NewClusterUpgradeStateManager(
 	log logr.Logger,
 	k8sConfig *rest.Config,
+	k8sClient client.Client,
 	eventRecorder record.EventRecorder,
 	opts StateOptions) (ClusterUpgradeStateManager, error) {
-	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, Scheme, eventRecorder)
+	commonmanager, err := NewCommonUpgradeStateManager(log, k8sConfig, k8sClient, eventRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create commonmanager upgrade state manager. %v", err)
 	}
