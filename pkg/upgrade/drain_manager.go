@@ -89,7 +89,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				log.V(consts.LogLevelWarning).Info("Drain Pod failed", "error", err)
 				return
 			}
-			log.V(consts.LogLevelInfo).Info("Drain Pod finished")
+			log.V(consts.LogLevelDebug).Info("Drain Pod finished")
 		},
 		Out:    os.Stdout,
 		ErrOut: os.Stdout,
@@ -97,7 +97,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 
 	for _, node := range drainConfig.Nodes {
 		if !m.drainingNodes.Has(node.Name) {
-			m.log.V(consts.LogLevelInfo).Info("Schedule drain for node", "node", node.Name)
+			m.log.V(consts.LogLevelDebug).Info("Schedule drain for node", "node", node.Name)
 			logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Scheduling drain of the node")
 
 			m.drainingNodes.Add(node.Name)
@@ -111,7 +111,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 						"Failed to cordon the node, %s", err.Error())
 					return
 				}
-				m.log.V(consts.LogLevelInfo).Info("Cordoned the node", "node", node.Name)
+				m.log.V(consts.LogLevelDebug).Info("Cordoned the node", "node", node.Name)
 
 				err = drain.RunNodeDrain(drainHelper, node.Name)
 				if err != nil {
@@ -121,13 +121,13 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 						"Failed to drain the node, %s", err.Error())
 					return
 				}
-				m.log.V(consts.LogLevelInfo).Info("Drained the node", "node", node.Name)
+				m.log.V(consts.LogLevelDebug).Info("Drained the node", "node", node.Name)
 				logEvent(m.eventRecorder, node, corev1.EventTypeNormal, GetEventReason(), "Successfully drained the node")
 
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStatePodRestartRequired)
 			}()
 		} else {
-			m.log.V(consts.LogLevelInfo).Info("Node is already being drained, skipping", "node", node.Name)
+			m.log.V(consts.LogLevelDebug).Info("Node is already being drained, skipping", "node", node.Name)
 		}
 	}
 	return nil
