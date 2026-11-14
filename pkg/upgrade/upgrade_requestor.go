@@ -186,7 +186,8 @@ func (m *RequestorNodeStateManagerImpl) createNodeMaintenance(ctx context.Contex
 	nodeState *NodeUpgradeState) error {
 	nm := m.NewNodeMaintenance(nodeState.Node.Name)
 	nodeState.NodeMaintenance = nm
-	m.Log.V(consts.LogLevelInfo).Info("creating node maintenance", nodeState.Node.Name, nm.Name)
+	m.Log.V(consts.LogLevelInfo).Info("creating node maintenance",
+		"node", nodeState.Node.Name, "nodeMaintenance", nm.Name)
 	err := m.K8sClient.Create(ctx, nm, &client.CreateOptions{})
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
@@ -237,6 +238,8 @@ func (m *RequestorNodeStateManagerImpl) deleteNodeMaintenance(ctx context.Contex
 	// send deletion request assuming maintenance OP will handle actual obj deletion
 	// avoid deletion if timestamp was already set
 	if nm.DeletionTimestamp == nil {
+		m.Log.V(consts.LogLevelInfo).Info("deleting node maintenance",
+			"nodeMaintenance", client.ObjectKeyFromObject(nm))
 		err = m.K8sClient.Delete(ctx, nm)
 		if err != nil {
 			return err
@@ -292,7 +295,7 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			}
 		}
 		if m.SkipNodeUpgrade(nodeState.Node) {
-			m.Log.V(consts.LogLevelInfo).Info("Node is marked for skipping upgrades", "node", nodeState.Node.Name)
+			m.Log.V(consts.LogLevelDebug).Info("Node is marked for skipping upgrades", "node", nodeState.Node.Name)
 			continue
 		}
 
@@ -328,13 +331,15 @@ func (m *RequestorNodeStateManagerImpl) createOrUpdateNodeMaintenance(ctx contex
 		}
 		// check if object is owned by the requestor, if so skip re-creation
 		if nm.Spec.RequestorID == m.opts.MaintenanceOPRequestorID {
-			m.Log.V(consts.LogLevelInfo).Info("nodeMaintenance already exists", nm.Name, "skip creation")
+			m.Log.V(consts.LogLevelDebug).Info("nodeMaintenance already exists, skip creation",
+				"node", nodeState.Node.Name,
+				"nodeMaintenance", nm.Name)
 			return nil
 		}
 
 		// check if requestor is already in AdditionalRequestors
 		if slices.Contains(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID) {
-			m.Log.V(consts.LogLevelInfo).Info("requestor already in AdditionalRequestors list",
+			m.Log.V(consts.LogLevelDebug).Info("requestor already in AdditionalRequestors list",
 				"requestorID", m.opts.MaintenanceOPRequestorID)
 			return nil
 		}
@@ -377,8 +382,6 @@ func (m *RequestorNodeStateManagerImpl) deleteOrUpdateNodeMaintenance(ctx contex
 		}
 		// check if object is owned by deleting requestor, if so proceed to deletion
 		if nm.Spec.RequestorID == m.opts.MaintenanceOPRequestorID {
-			m.Log.V(consts.LogLevelInfo).Info("deleting node maintenance",
-				"nodeMaintenance", client.ObjectKeyFromObject(nodeState.NodeMaintenance))
 			err := m.deleteNodeMaintenance(ctx, nodeState)
 			if err != nil {
 				m.Log.V(consts.LogLevelWarning).Error(
@@ -386,22 +389,18 @@ func (m *RequestorNodeStateManagerImpl) deleteOrUpdateNodeMaintenance(ctx contex
 					client.ObjectKeyFromObject(nodeState.NodeMaintenance))
 				return err
 			}
-		} else {
+		} else if slices.Contains(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID) {
 			m.Log.V(consts.LogLevelInfo).Info("removing requestor from node maintenance additional requestors list",
-				nodeState.NodeMaintenance.GetName(), nodeState.NodeMaintenance.GetNamespace())
-			// remove requestorID from spec.AdditionalRequestors list and patch the object
-			// check if requestorID is under additional requestors list
-			if slices.Contains(nm.Spec.AdditionalRequestors, m.opts.MaintenanceOPRequestorID) {
-				originalNm := nm.DeepCopy()
-				nm.Spec.AdditionalRequestors = slices.DeleteFunc(nm.Spec.AdditionalRequestors, func(id string) bool {
-					return id == m.opts.MaintenanceOPRequestorID
-				})
-				patch := client.MergeFromWithOptions(originalNm, client.MergeFromWithOptimisticLock{})
-				err := m.K8sClient.Patch(ctx, nm, patch)
-				if err != nil {
-					return fmt.Errorf("failed to remove requestor from additionalRequestors."+
-						"failed to patch nodeMaintenance %s. %w", client.ObjectKeyFromObject(nodeState.NodeMaintenance), err)
-				}
+				"requestor", m.opts.MaintenanceOPRequestorID, "nodeMaintenance", client.ObjectKeyFromObject(nm))
+			originalNm := nm.DeepCopy()
+			nm.Spec.AdditionalRequestors = slices.DeleteFunc(nm.Spec.AdditionalRequestors, func(id string) bool {
+				return id == m.opts.MaintenanceOPRequestorID
+			})
+			patch := client.MergeFromWithOptions(originalNm, client.MergeFromWithOptimisticLock{})
+			err := m.K8sClient.Patch(ctx, nm, patch)
+			if err != nil {
+				return fmt.Errorf("failed to remove requestor from additionalRequestors."+
+					"failed to patch nodeMaintenance %s. %w", client.ObjectKeyFromObject(nodeState.NodeMaintenance), err)
 			}
 		}
 	}
@@ -420,7 +419,7 @@ func (m *RequestorNodeStateManagerImpl) ProcessNodeMaintenanceRequiredNodes(ctx 
 		if nodeState.NodeMaintenance == nil {
 			if !IsNodeInRequestorMode(nodeState.Node) {
 				m.Log.V(consts.LogLevelWarning).Info("missing node annotation", "node", nodeState.Node.Name,
-					"annotations", nodeState.Node.Annotations)
+					"annotation", GetUpgradeRequestorModeAnnotationKey())
 			}
 			// update node state back to 'upgrade-required' in case of missing nodeMaintenance obj
 			err := m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node,
@@ -480,7 +479,7 @@ func (m *RequestorNodeStateManagerImpl) ProcessUncordonRequiredNodes(
 		err = m.deleteOrUpdateNodeMaintenance(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelWarning).Error(
-				err, "Node uncordon failed", "node", nodeState.Node)
+				err, "Node uncordon failed", "node", nodeState.Node.Name)
 			return err
 		}
 	}

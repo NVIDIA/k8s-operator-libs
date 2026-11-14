@@ -89,7 +89,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				log.V(consts.LogLevelWarning).Info("Drain Pod failed", "error", err)
 				return
 			}
-			log.V(consts.LogLevelInfo).Info("Drain Pod finished")
+			log.V(consts.LogLevelDebug).Info("Drain Pod finished")
 		},
 		Out:    os.Stdout,
 		ErrOut: os.Stdout,
@@ -127,7 +127,7 @@ func (m *DrainManagerImpl) ScheduleNodesDrain(ctx context.Context, drainConfig *
 				_ = m.nodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, node, UpgradeStatePodRestartRequired)
 			}()
 		} else {
-			m.log.V(consts.LogLevelInfo).Info("Node is already being drained, skipping", "node", node.Name)
+			m.log.V(consts.LogLevelDebug).Info("Node is already being drained, skipping", "node", node.Name)
 		}
 	}
 	return nil
