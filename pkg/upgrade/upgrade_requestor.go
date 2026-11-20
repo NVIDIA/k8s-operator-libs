@@ -296,14 +296,6 @@ func (m *RequestorNodeStateManagerImpl) ProcessUpgradeRequiredNodes(
 			continue
 		}
 
-		if m.SkipCordonedNode(nodeState.Node, upgradePolicy) {
-			// Hold the node in upgrade-required until it is uncordoned.
-			m.Log.V(consts.LogLevelInfo).Info(
-				"Node is cordoned, skipping driver upgrade until the node is uncordoned",
-				"node", nodeState.Node.Name)
-			continue
-		}
-
 		if err := m.RecordInitialUnschedulableState(ctx, nodeState.Node); err != nil {
 			return err
 		}

@@ -89,14 +89,17 @@ var _ = Describe("CordonManager tests", func() {
 		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
 	})
 
-	It("CordonManager should refuse an administrator cordon", func() {
+	It("CordonManager should record an administrator cordon and keep it on uncordon", func() {
 		node := NewNode("admin-cordon-node").Unschedulable(true).CreateAs("kubectl-cordon")
 
 		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
-		Expect(cordonManager.Cordon(testCtx, node)).To(MatchError(upgrade.ErrNodeCordonedExternally))
-
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.GetUpgradeInitialStateAnnotationKey(), "true"))
 		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
+
+		Expect(cordonManager.Uncordon(testCtx, node)).To(Succeed())
+		Expect(node.Spec.Unschedulable).To(BeTrue())
 	})
 
 	It("CordonManager should not treat a driver-manager \"true\" recording as a claim", func() {
@@ -106,11 +109,24 @@ var _ = Describe("CordonManager tests", func() {
 			CreateAs(upgrade.DriverManagerFieldManager)
 
 		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
-		Expect(cordonManager.Cordon(testCtx, node)).To(MatchError(upgrade.ErrNodeCordonedExternally))
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.GetUpgradeInitialStateAnnotationKey(), "true"))
 		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
 	})
 
-	It("CordonManager should drop a stale claim on a cordon someone else re-applied", func() {
+	It("CordonManager should clear a stale initial state once the node was uncordoned", func() {
+		node := NewNode("stale-initial-state-node").
+			WithAnnotations(map[string]string{upgrade.GetUpgradeInitialStateAnnotationKey(): "true"}).
+			Create()
+
+		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
+		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.UpgradeControllerCordonClaimAnnotation, "true"))
+		Expect(node.Annotations).NotTo(HaveKey(upgrade.GetUpgradeInitialStateAnnotationKey()))
+	})
+
+	It("CordonManager should record a cordon someone else re-applied and drop the stale claim", func() {
 		node := NewNode("reapplied-cordon-node").Create()
 
 		cordonManager := upgrade.NewCordonManager(k8sInterface, log)
@@ -120,8 +136,9 @@ var _ = Describe("CordonManager tests", func() {
 		node = setUnschedulableAs(node, "kubectl-cordon", true)
 		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.UpgradeControllerCordonClaimAnnotation, "true"))
 
-		Expect(cordonManager.Cordon(testCtx, node)).To(MatchError(upgrade.ErrNodeCordonedExternally))
+		Expect(cordonManager.Cordon(testCtx, node)).To(Succeed())
 		Expect(node.Spec.Unschedulable).To(BeTrue())
+		Expect(node.Annotations).To(HaveKeyWithValue(upgrade.GetUpgradeInitialStateAnnotationKey(), "true"))
 		Expect(node.Annotations).NotTo(HaveKey(upgrade.UpgradeControllerCordonClaimAnnotation))
 	})
 

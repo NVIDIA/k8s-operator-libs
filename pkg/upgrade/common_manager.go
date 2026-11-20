@@ -2,7 +2,6 @@ package upgrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -365,18 +364,6 @@ func (m *CommonUpgradeManagerImpl) ProcessCordonRequiredNodes(
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateCordonRequired] {
 		err := m.CordonManager.Cordon(ctx, nodeState.Node)
-		if errors.Is(err, ErrNodeCordonedExternally) {
-			m.Log.V(consts.LogLevelInfo).Info(
-				"Node was cordoned by an external actor before the upgrade claimed it, returning it to upgrade-required",
-				"node", nodeState.Node.Name)
-			err = m.NodeUpgradeStateProvider.ChangeNodeUpgradeState(ctx, nodeState.Node, UpgradeStateUpgradeRequired)
-			if err != nil {
-				m.Log.V(consts.LogLevelError).Error(
-					err, "Failed to change node upgrade state", "state", UpgradeStateUpgradeRequired)
-				return err
-			}
-			continue
-		}
 		if err != nil {
 			m.Log.V(consts.LogLevelWarning).Error(
 				err, "Node cordon failed", "node", nodeState.Node)
@@ -680,17 +667,8 @@ func (m *CommonUpgradeManagerImpl) SkipNodeUpgrade(node *corev1.Node) bool {
 	return node.Labels[GetUpgradeSkipNodeLabelKey()] == trueString
 }
 
-func (m *CommonUpgradeManagerImpl) SkipCordonedNode(node *corev1.Node,
-	upgradePolicy *v1alpha1.DriverUpgradePolicySpec) bool {
-	if upgradePolicy != nil && upgradePolicy.SkipCordonedNodes != nil && !*upgradePolicy.SkipCordonedNodes {
-		return false
-	}
-	if !node.Spec.Unschedulable {
-		return false
-	}
-	return !hasGPUCordonClaim(node)
-}
-
+// RecordInitialUnschedulableState records or clears the node's pre-upgrade unschedulable annotation
+// before the maintenance operator cordons it in requestor mode. In-place mode records it in Cordon.
 func (m *CommonUpgradeManagerImpl) RecordInitialUnschedulableState(ctx context.Context,
 	node *corev1.Node) error {
 	annotationKey := GetUpgradeInitialStateAnnotationKey()

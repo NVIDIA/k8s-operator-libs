@@ -16,7 +16,6 @@ package upgrade
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -26,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
+
+	"github.com/NVIDIA/k8s-operator-libs/pkg/consts"
 )
 
 // CordonManagerImpl implements CordonManager interface and can
@@ -41,10 +42,6 @@ type CordonManager interface {
 	Uncordon(ctx context.Context, node *corev1.Node) error
 }
 
-// ErrNodeCordonedExternally is returned by Cordon when the node is already cordoned by someone
-// other than a GPU component.
-var ErrNodeCordonedExternally = errors.New("node is cordoned by an external actor")
-
 // gpuFieldManagers are the field managers whose writes to spec.unschedulable count as a GPU cordon.
 // A component joining an existing cordon does not take over the field, so either manager is accepted.
 var gpuFieldManagers = []string{UpgradeControllerFieldManager, DriverManagerFieldManager}
@@ -57,27 +54,33 @@ func (m *CordonManagerImpl) Cordon(ctx context.Context, node *corev1.Node) error
 			return fmt.Errorf("failed to get node %s: %w", node.Name, err)
 		}
 
-		if current.Spec.Unschedulable {
-			// The node was cordoned before an upgrade that was allowed to proceed anyway.
-			if current.Annotations[GetUpgradeInitialStateAnnotationKey()] == trueString {
+		// A cordon someone else already applied is recorded as the node's initial state instead of
+		// claimed, so the upgrade leaves it in place.
+		initialStateKey := GetUpgradeInitialStateAnnotationKey()
+		_, recorded := current.Annotations[initialStateKey]
+		annotations := map[string]any{}
+		if current.Spec.Unschedulable && !hasGPUCordonClaim(current) {
+			if !recorded {
+				m.log.V(consts.LogLevelInfo).Info("Node is already cordoned, recording its initial state",
+					"node", current.Name, "annotation", initialStateKey)
+				annotations[initialStateKey] = trueString
+			}
+			if current.Annotations[UpgradeControllerCordonClaimAnnotation] == trueString {
+				annotations[UpgradeControllerCordonClaimAnnotation] = nil
+			}
+			if len(annotations) == 0 {
 				current.DeepCopyInto(node)
 				return nil
 			}
-			if !hasGPUCordonClaim(current) {
-				if current.Annotations[UpgradeControllerCordonClaimAnnotation] == trueString {
-					current, err = m.patchNodeSchedulingState(ctx, current, true,
-						map[string]any{UpgradeControllerCordonClaimAnnotation: nil})
-					if err != nil {
-						return err
-					}
-				}
-				current.DeepCopyInto(node)
-				return fmt.Errorf("%w: %s", ErrNodeCordonedExternally, node.Name)
+		} else {
+			annotations[UpgradeControllerCordonClaimAnnotation] = trueString
+			if recorded {
+				// The node was uncordoned since the state was recorded, or a GPU component cordoned it.
+				annotations[initialStateKey] = nil
 			}
 		}
 
-		updated, err := m.patchNodeSchedulingState(ctx, current, true,
-			map[string]any{UpgradeControllerCordonClaimAnnotation: trueString})
+		updated, err := m.patchNodeSchedulingState(ctx, current, true, annotations)
 		if err != nil {
 			return err
 		}
