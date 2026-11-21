@@ -238,7 +238,8 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 			Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 		})
-		It("UpgradeStateManager should move outdated nodes to UpgradeRequired state and annotate node if unschedulable", func() {
+		It("UpgradeStateManager should move outdated nodes to UpgradeRequired state "+
+			"without recording the initial unschedulable state", func() {
 			testCtx := context.TODO()
 
 			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
@@ -273,15 +274,48 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(DoneToDoneNode)).To(Equal(upgrade.UpgradeStateDone))
 			Expect(getNodeUpgradeState(DoneToUpgradeRequiredNode)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
 
+			// Initial unschedulable state is recorded when the upgrade starts, not when it is detected.
 			Expect(isUnschedulableAnnotationPresent(UnknownToUpgradeRequiredNode)).
-				To(Equal(true))
+				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(DoneToUpgradeRequiredNode)).
-				To(Equal(true))
+				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(UnknownToDoneNode)).
 				To(Equal(false))
 			Expect(isUnschedulableAnnotationPresent(DoneToDoneNode)).
 				To(Equal(false))
 
+		})
+		It("UpgradeStateManager should upgrade nodes that are already cordoned", func() {
+			testCtx := context.TODO()
+
+			daemonSet := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{}}
+			outdatedPod := &corev1.Pod{
+				ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-outdated"}}}
+
+			cordonedNode := NewNode(fmt.Sprintf("node1-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Unschedulable(true).CreateAs("kubectl-cordon")
+			schedulableNode := NewNode(fmt.Sprintf("node2-%s", id)).
+				WithUpgradeState(upgrade.UpgradeStateUpgradeRequired).Create()
+
+			clusterState := upgrade.NewClusterUpgradeState()
+			clusterState.NodeStates[upgrade.UpgradeStateUpgradeRequired] = []*upgrade.NodeUpgradeState{
+				{Node: cordonedNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+				{Node: schedulableNode, DriverPod: outdatedPod, DriverDaemonSet: daemonSet},
+			}
+
+			provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+			stateManager.NodeUpgradeStateProvider = provider
+
+			policy := &v1alpha1.DriverUpgradePolicySpec{
+				AutoUpgrade:         true,
+				MaxParallelUpgrades: 0,
+				MaxUnavailable:      &intstr.IntOrString{Type: intstr.String, StrVal: "100%"},
+			}
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState, policy)).To(Succeed())
+
+			// The cordon itself is recorded by CordonManager.Cordon, so uncordon later restores it.
+			Expect(getNodeUpgradeState(cordonedNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
+			Expect(getNodeUpgradeState(schedulableNode)).To(Equal(upgrade.UpgradeStateCordonRequired))
 		})
 		It("UpgradeStateManager should move up-to-date nodes with safe driver loading annotation "+
 			"to UpgradeRequired state", func() {
