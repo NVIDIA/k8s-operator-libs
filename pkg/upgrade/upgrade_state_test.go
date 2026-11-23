@@ -198,6 +198,48 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(len(upgradeState.NodeStates)).To(Equal(1))
 			Expect(upgradeState.NodeStates[""][0].IsOrphanedPod()).To(BeTrue())
 		})
+
+		It("should filter DaemonSets before validation while preserving orphaned pods", func() {
+			selector := map[string]string{"foo": "bar"}
+			node := createNode(fmt.Sprintf("node-%s", id))
+			selected := NewDaemonSet("selected", namespace.Name, selector).
+				WithDesiredNumberScheduled(1).WithLabels(selector).Create()
+			// A scaling-down DaemonSet can still have a pod after its desired count reaches zero.
+			excluded := NewDaemonSet("excluded", namespace.Name, selector).
+				WithDesiredNumberScheduled(0).WithLabels(selector).Create()
+			for _, ds := range []*appsv1.DaemonSet{selected, excluded} {
+				NewPod(ds.Name, namespace.Name, node.Name).WithLabels(selector).
+					WithOwnerReference(*v1.NewControllerRef(ds, appsv1.SchemeGroupVersion.WithKind("DaemonSet"))).Create()
+			}
+			NewPod("orphan", namespace.Name, node.Name).WithLabels(selector).Create()
+			keepSelected := func(ds *appsv1.DaemonSet) bool { return ds.UID == selected.UID }
+
+			state, err := stateManagerInterface.BuildState(testCtx, namespace.Name, selector, nil, keepSelected)
+			Expect(err).NotTo(HaveOccurred())
+			var pods []string
+			for _, nodeState := range state.NodeStates[""] {
+				pods = append(pods, nodeState.DriverPod.Name)
+			}
+			Expect(pods).To(ConsistOf("selected", "orphan"))
+
+			// Filtering is per call: omitted and nil filters still validate every matching DaemonSet.
+			_, err = stateManagerInterface.BuildState(testCtx, namespace.Name, selector)
+			Expect(err).To(MatchError("driver DaemonSet should not have Unscheduled pods"))
+			_, err = stateManagerInterface.BuildState(testCtx, namespace.Name, selector, nil)
+			Expect(err).To(MatchError("driver DaemonSet should not have Unscheduled pods"))
+
+			state, err = stateManagerInterface.BuildState(testCtx, namespace.Name, selector,
+				keepSelected, func(*appsv1.DaemonSet) bool { return false })
+			Expect(err).NotTo(HaveOccurred())
+			Expect(state.NodeStates[""]).To(HaveLen(1))
+			Expect(state.NodeStates[""][0].DriverPod.Name).To(Equal("orphan"))
+
+			// Selected DaemonSets must still pass the existing pod-count check.
+			selected.Status.DesiredNumberScheduled = 2
+			Expect(k8sClient.Status().Update(testCtx, selected)).To(Succeed())
+			_, err = stateManagerInterface.BuildState(testCtx, namespace.Name, selector, keepSelected)
+			Expect(err).To(MatchError("driver DaemonSet should not have Unscheduled pods"))
+		})
 	})
 
 	Describe("ApplyState", func() {
