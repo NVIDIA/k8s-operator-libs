@@ -169,4 +169,42 @@ var _ = Describe("ValidationManager", func() {
 		Expect(err).To(Succeed())
 		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
 	})
+
+	It("Validate() should mark node as UpgradeFailed on timeout when only some validation pods are Ready", func() {
+		provider := upgrade.NewNodeUpgradeStateProvider(k8sClient, log, eventRecorder)
+		err := provider.ChangeNodeUpgradeState(ctx, node, upgrade.UpgradeStateValidationRequired)
+		Expect(err).To(Succeed())
+
+		// pods are listed in name order, so the Ready pod is seen before the not Ready one
+		_ = NewPod("pod-a", namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+		notReadyPod := NewPod("pod-b", namespace.Name, node.Name).
+			WithLabels(map[string]string{"app": "validator"}).
+			Create()
+		notReadyPod.Status.ContainerStatuses[0].Ready = false
+		_ = updatePodStatus(notReadyPod)
+
+		validationManager := upgrade.NewValidationManager(k8sInterface, log, eventRecorder, provider, "app=validator")
+		validationDone, err := validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(false))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(isValidationAnnotationPresent(node)).To(Equal(true))
+
+		startTime := strconv.FormatInt(time.Now().Unix()-605, 10)
+		err = provider.ChangeNodeUpgradeAnnotation(ctx, node, upgrade.GetValidationStartTimeAnnotationKey(), startTime)
+		Expect(err).To(Succeed())
+
+		validationDone, err = validationManager.Validate(ctx, node)
+		Expect(err).To(Succeed())
+		Expect(validationDone).To(Equal(false))
+
+		node, err = provider.GetNode(ctx, node.Name)
+		Expect(err).To(Succeed())
+		Expect(node.Labels[upgrade.GetUpgradeStateLabelKey()]).To(Equal(upgrade.UpgradeStateFailed))
+		Expect(isValidationAnnotationPresent(node)).To(Equal(false))
+	})
 })

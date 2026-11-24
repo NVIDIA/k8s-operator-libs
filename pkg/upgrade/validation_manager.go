@@ -91,7 +91,6 @@ func (m *ValidationManagerImpl) Validate(ctx context.Context, node *corev1.Node)
 	m.log.V(consts.LogLevelDebug).Info("Found validation pods", "selector", m.podSelector, "node", node.Name,
 		"pods", len(podList.Items))
 
-	done := true
 	for _, pod := range podList.Items {
 		if !m.isPodReady(pod) {
 			err = m.handleTimeout(ctx, node, int64(validationTimeoutSeconds))
@@ -100,19 +99,19 @@ func (m *ValidationManagerImpl) Validate(ctx context.Context, node *corev1.Node)
 					"Failed to handle timeout for validation state: %s", err.Error())
 				return false, fmt.Errorf("unable to handle timeout for validation state: %v", err)
 			}
-			done = false
-			break
-		}
-		// remove annotation used for tracking state time
-		annotationKey := GetValidationStartTimeAnnotationKey()
-		err = m.nodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, "null")
-		if err != nil {
-			m.log.V(consts.LogLevelError).Error(err, "Failed to remove annotation used to track validation completion",
-				"node", node.Name, "annotation", annotationKey)
-			return done, err
+			return false, nil
 		}
 	}
-	return done, nil
+
+	// all validation pods are ready, remove annotation used for tracking start time
+	annotationKey := GetValidationStartTimeAnnotationKey()
+	err = m.nodeUpgradeStateProvider.ChangeNodeUpgradeAnnotation(ctx, node, annotationKey, "null")
+	if err != nil {
+		m.log.V(consts.LogLevelError).Error(err, "Failed to remove annotation used to track validation completion",
+			"node", node.Name, "annotation", annotationKey)
+		return true, err
+	}
+	return true, nil
 }
 
 func (m *ValidationManagerImpl) isPodReady(pod corev1.Pod) bool {
