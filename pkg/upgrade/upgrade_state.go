@@ -19,6 +19,8 @@ package upgrade
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -52,7 +54,7 @@ type ClusterUpgradeStateManager interface {
 	// ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
 	// Based on the current state of the node, it is calculated if the node can be moved to the next state right now
 	// or whether any actions need to be scheduled for the node to move to the next state.
-	// The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
+	// Node processing is stateless and idempotent. If an error is returned before all nodes' states are processed,
 	// ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 	ApplyState(ctx context.Context,
 		currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error)
@@ -65,6 +67,9 @@ type ClusterUpgradeStateManagerImpl struct {
 	inplace   ProcessNodeStateManager
 	requestor ProcessNodeStateManager
 	opts      StateOptions
+
+	nodeStateLogMu            sync.Mutex
+	lastLoggedNodeStateCounts []nodeStateLogCount
 }
 
 // NewClusterUpgradeStateManager creates a new instance of ClusterUpgradeStateManagerImpl
@@ -167,12 +172,12 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 		}
 		// Check if pod is already scheduled to a Node
 		if pod.Spec.NodeName == "" && pod.Status.Phase == corev1.PodPending {
-			m.Log.V(consts.LogLevelInfo).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
+			m.Log.V(consts.LogLevelDebug).Info("Driver Pod has no NodeName, skipping", "pod", pod.Name)
 			continue
 		}
 		nodeState, err := m.buildNodeUpgradeState(ctx, pod, ownerDaemonSet)
 		if err != nil {
-			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod)
+			m.Log.V(consts.LogLevelError).Error(err, "Failed to build node upgrade state for pod", "pod", pod.Name)
 			return nil, err
 		}
 		nodeStateLabel := nodeState.Node.Labels[upgradeStateLabel]
@@ -186,7 +191,7 @@ func (m *ClusterUpgradeStateManagerImpl) BuildState(ctx context.Context, namespa
 // ApplyState receives a complete cluster upgrade state and, based on upgrade policy, processes each node's state.
 // Based on the current state of the node, it is calculated if the node can be moved to the next state right now
 // or whether any actions need to be scheduled for the node to move to the next state.
-// The function is stateless and idempotent. If the error was returned before all nodes' states were processed,
+// Node processing is stateless and idempotent. If an error is returned before all nodes' states are processed,
 // ApplyState would be called again and complete the processing - all the decisions are based on the input data.
 func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	currentState *ClusterUpgradeState, upgradePolicy *v1alpha1.DriverUpgradePolicySpec) (err error) {
@@ -201,20 +206,7 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return nil
 	}
 
-	m.Log.V(consts.LogLevelInfo).Info("Node states:",
-		"Unknown", len(currentState.NodeStates[UpgradeStateUnknown]),
-		UpgradeStateDone, len(currentState.NodeStates[UpgradeStateDone]),
-		UpgradeStateUpgradeRequired, len(currentState.NodeStates[UpgradeStateUpgradeRequired]),
-		UpgradeStateCordonRequired, len(currentState.NodeStates[UpgradeStateCordonRequired]),
-		UpgradeStateWaitForJobsRequired, len(currentState.NodeStates[UpgradeStateWaitForJobsRequired]),
-		UpgradeStatePodDeletionRequired, len(currentState.NodeStates[UpgradeStatePodDeletionRequired]),
-		UpgradeStateFailed, len(currentState.NodeStates[UpgradeStateFailed]),
-		UpgradeStateDrainRequired, len(currentState.NodeStates[UpgradeStateDrainRequired]),
-		UpgradeStateNodeMaintenanceRequired, len(currentState.NodeStates[UpgradeStateNodeMaintenanceRequired]),
-		UpgradeStatePostMaintenanceRequired, len(currentState.NodeStates[UpgradeStatePostMaintenanceRequired]),
-		UpgradeStatePodRestartRequired, len(currentState.NodeStates[UpgradeStatePodRestartRequired]),
-		UpgradeStateValidationRequired, len(currentState.NodeStates[UpgradeStateValidationRequired]),
-		UpgradeStateUncordonRequired, len(currentState.NodeStates[UpgradeStateUncordonRequired]))
+	m.logNodeStates(currentState)
 
 	// Determine the object to log this event
 	// m.EventRecorder.Eventf(m.Namespace, v1.EventTypeNormal, GetEventReason(),
@@ -298,6 +290,47 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 	}
 	m.Log.V(consts.LogLevelInfo).Info("State Manager, finished processing")
 	return nil
+}
+
+type nodeStateLogCount struct {
+	key   string
+	count int
+}
+
+// logNodeStates logs the first snapshot and any changes to the summary counts.
+func (m *ClusterUpgradeStateManagerImpl) logNodeStates(currentState *ClusterUpgradeState) {
+	driverDaemonSets, ownedDriverPods, orphanedDriverPods := currentState.driverPodCounts()
+	counts := []nodeStateLogCount{
+		{"driver-daemonsets", driverDaemonSets},
+		{"owned-driver-pods", ownedDriverPods},
+		{"orphaned-driver-pods", orphanedDriverPods},
+		{"unknown", len(currentState.NodeStates[UpgradeStateUnknown])},
+		{UpgradeStateDone, len(currentState.NodeStates[UpgradeStateDone])},
+		{UpgradeStateUpgradeRequired, len(currentState.NodeStates[UpgradeStateUpgradeRequired])},
+		{UpgradeStateCordonRequired, len(currentState.NodeStates[UpgradeStateCordonRequired])},
+		{UpgradeStateWaitForJobsRequired, len(currentState.NodeStates[UpgradeStateWaitForJobsRequired])},
+		{UpgradeStatePodDeletionRequired, len(currentState.NodeStates[UpgradeStatePodDeletionRequired])},
+		{UpgradeStateFailed, len(currentState.NodeStates[UpgradeStateFailed])},
+		{UpgradeStateDrainRequired, len(currentState.NodeStates[UpgradeStateDrainRequired])},
+		{UpgradeStateNodeMaintenanceRequired, len(currentState.NodeStates[UpgradeStateNodeMaintenanceRequired])},
+		{UpgradeStatePostMaintenanceRequired, len(currentState.NodeStates[UpgradeStatePostMaintenanceRequired])},
+		{UpgradeStatePodRestartRequired, len(currentState.NodeStates[UpgradeStatePodRestartRequired])},
+		{UpgradeStateValidationRequired, len(currentState.NodeStates[UpgradeStateValidationRequired])},
+		{UpgradeStateUncordonRequired, len(currentState.NodeStates[UpgradeStateUncordonRequired])},
+	}
+
+	m.nodeStateLogMu.Lock()
+	defer m.nodeStateLogMu.Unlock()
+	if slices.Equal(m.lastLoggedNodeStateCounts, counts) {
+		return
+	}
+
+	fields := make([]any, 0, 2*len(counts))
+	for _, field := range counts {
+		fields = append(fields, field.key, field.count)
+	}
+	m.Log.V(consts.LogLevelInfo).Info("Node states:", fields...)
+	m.lastLoggedNodeStateCounts = counts
 }
 
 func (m *ClusterUpgradeStateManagerImpl) GetRequestor() ProcessNodeStateManager {
@@ -399,7 +432,7 @@ func (m *ClusterUpgradeStateManagerImpl) buildNodeUpgradeState(
 	}
 
 	upgradeStateLabel := GetUpgradeStateLabelKey()
-	m.Log.V(consts.LogLevelInfo).Info("Node hosting a driver pod",
+	m.Log.V(consts.LogLevelDebug).Info("Node hosting a driver pod",
 		"node", node.Name, "state", node.Labels[upgradeStateLabel])
 
 	return &NodeUpgradeState{Node: node, DriverPod: pod, DriverDaemonSet: ds, NodeMaintenance: nm}, nil

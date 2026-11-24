@@ -106,6 +106,49 @@ func TestGetPodsByDSOwner(t *testing.T) {
 	}
 }
 
+func TestDriverPodCounts(t *testing.T) {
+	daemonSetA := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "driver-a"}}
+	daemonSetB := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "driver-b"}}
+
+	tests := []struct {
+		name  string
+		state ClusterUpgradeState
+		want  [3]int
+	}{
+		{
+			name: "owned and orphaned pods across upgrade states",
+			state: ClusterUpgradeState{
+				NodeStates: map[string][]*NodeUpgradeState{
+					UpgradeStateDone: {
+						{DriverPod: &corev1.Pod{}, DriverDaemonSet: daemonSetA},
+						{DriverPod: &corev1.Pod{}, DriverDaemonSet: daemonSetB},
+					},
+					UpgradeStateUpgradeRequired: {
+						{DriverPod: &corev1.Pod{}, DriverDaemonSet: daemonSetA.DeepCopy()},
+						{DriverPod: &corev1.Pod{}},
+					},
+				},
+			},
+			want: [3]int{2, 3, 1},
+		},
+		{
+			name:  "empty state",
+			state: NewClusterUpgradeState(),
+			want:  [3]int{0, 0, 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemonSets, ownedPods, orphanedPods := tt.state.driverPodCounts()
+			got := [3]int{daemonSets, ownedPods, orphanedPods}
+			if got != tt.want {
+				t.Errorf("driverPodCounts() (DaemonSets, owned pods, orphaned pods) = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func podNamesByOwner(podsByOwner map[types.UID][]corev1.Pod) map[types.UID][]string {
 	namesByOwner := make(map[types.UID][]string, len(podsByOwner))
 	for owner, pods := range podsByOwner {
