@@ -260,6 +260,14 @@ func (n Node) Create() *corev1.Node {
 	return node
 }
 
+func (n Node) CreateAs(fieldManager string) *corev1.Node {
+	node := n.Node
+	err := k8sClient.Create(context.TODO(), node, client.FieldOwner(fieldManager))
+	Expect(err).NotTo(HaveOccurred())
+	createdObjects = append(createdObjects, node)
+	return node
+}
+
 type NodeMaintenance struct {
 	*maintenancev1alpha1.NodeMaintenance
 }
