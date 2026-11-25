@@ -1167,6 +1167,87 @@ var _ = Describe("UpgradeStateManager tests", func() {
 			Expect(getNodeUpgradeState(podRestartNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
 			Expect(getNodeUpgradeState(upgradeFailedNode)).To(Equal(upgrade.UpgradeStateUncordonRequired))
 		})
+		It("UpgradeStateManager should read the revision hash once per DaemonSet in ApplyState", func() {
+			dsA := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{UID: "ds-a"}}
+			dsB := &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{UID: "ds-b"}}
+			podWithHash := func(hash string) *corev1.Pod {
+				return &corev1.Pod{
+					Status: corev1.PodStatus{
+						Phase:             corev1.PodRunning,
+						ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+					},
+					ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: hash}}}
+			}
+			nodeState := func(state string, ds *appsv1.DaemonSet, podHash string) *upgrade.NodeUpgradeState {
+				return &upgrade.NodeUpgradeState{
+					Node: nodeWithUpgradeState(state), DriverPod: podWithHash(podHash), DriverDaemonSet: ds}
+			}
+
+			clusterState := upgrade.NewClusterUpgradeState()
+			unknownSynced := nodeState("", dsA, "hash-a")
+			unknownOutdated := nodeState("", dsA, "hash-b")
+			doneSynced := nodeState(upgrade.UpgradeStateDone, dsB, "hash-b")
+			doneOutdated := nodeState(upgrade.UpgradeStateDone, dsB, "hash-a")
+			podRestartSynced := nodeState(upgrade.UpgradeStatePodRestartRequired, dsB, "hash-b")
+			failedSynced := nodeState(upgrade.UpgradeStateFailed, dsA, "hash-a")
+			clusterState.NodeStates[""] = []*upgrade.NodeUpgradeState{unknownSynced, unknownOutdated}
+			clusterState.NodeStates[upgrade.UpgradeStateDone] = []*upgrade.NodeUpgradeState{doneSynced, doneOutdated}
+			clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{podRestartSynced}
+			clusterState.NodeStates[upgrade.UpgradeStateFailed] = []*upgrade.NodeUpgradeState{failedSynced}
+
+			hashes := map[types.UID]string{dsA.UID: "hash-a", dsB.UID: "hash-b"}
+			podManagerMock := revisionHashPodManager(
+				func(_ context.Context, ds *appsv1.DaemonSet) string { return hashes[ds.UID] }, nil)
+			stateManager.PodManager = podManagerMock
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+				&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+			podManagerMock.AssertNumberOfCalls(GinkgoT(), "GetDaemonsetControllerRevisionHash", 2)
+			Expect(getNodeUpgradeState(unknownSynced.Node)).To(Equal(upgrade.UpgradeStateDone))
+			Expect(getNodeUpgradeState(unknownOutdated.Node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			Expect(getNodeUpgradeState(doneSynced.Node)).To(Equal(upgrade.UpgradeStateDone))
+			Expect(getNodeUpgradeState(doneOutdated.Node)).To(Equal(upgrade.UpgradeStateUpgradeRequired))
+			Expect(getNodeUpgradeState(podRestartSynced.Node)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+			Expect(getNodeUpgradeState(failedSynced.Node)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+		})
+		It("UpgradeStateManager should read the revision hash once for a synced PodRestartRequired node", func() {
+			clusterState := upgrade.NewClusterUpgradeState()
+			node := nodeWithUpgradeState(upgrade.UpgradeStatePodRestartRequired)
+			clusterState.NodeStates[upgrade.UpgradeStatePodRestartRequired] = []*upgrade.NodeUpgradeState{{
+				Node: node,
+				DriverPod: &corev1.Pod{
+					Status: corev1.PodStatus{
+						Phase:             corev1.PodRunning,
+						ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+					},
+					ObjectMeta: v1.ObjectMeta{Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}},
+				DriverDaemonSet: &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{UID: "ds"}},
+			}}
+			podManagerMock := revisionHashPodManager("test-hash-12345", nil)
+			stateManager.PodManager = podManagerMock
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+				&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(Succeed())
+			podManagerMock.AssertNumberOfCalls(GinkgoT(), "GetDaemonsetControllerRevisionHash", 1)
+			Expect(getNodeUpgradeState(node)).To(Equal(upgrade.UpgradeStateUncordonRequired))
+		})
+		It("UpgradeStateManager should return the error when the revision hash read fails", func() {
+			clusterState := upgrade.NewClusterUpgradeState()
+			clusterState.NodeStates[upgrade.UpgradeStateDone] = []*upgrade.NodeUpgradeState{{
+				Node: nodeWithUpgradeState(upgrade.UpgradeStateDone),
+				DriverPod: &corev1.Pod{ObjectMeta: v1.ObjectMeta{
+					Labels: map[string]string{upgrade.PodControllerRevisionHashLabelKey: "test-hash-12345"}}},
+				DriverDaemonSet: &appsv1.DaemonSet{ObjectMeta: v1.ObjectMeta{UID: "ds"}},
+			}}
+			listErr := errors.New("list failed")
+			podManagerMock := revisionHashPodManager("", listErr)
+			stateManager.PodManager = podManagerMock
+
+			Expect(stateManagerInterface.ApplyState(testCtx, &clusterState,
+				&v1alpha1.DriverUpgradePolicySpec{AutoUpgrade: true})).To(MatchError(listErr))
+			Expect(getNodeUpgradeState(clusterState.NodeStates[upgrade.UpgradeStateDone][0].Node)).
+				To(Equal(upgrade.UpgradeStateDone))
+		})
 		It("UpgradeStateManager should move pod to UpgradeDone state "+
 			"if it's in PodRestart or UpgradeFailed, driver pod is up-to-date and ready, and node was initially Unschedulable", func() {
 			testCtx := context.TODO()
@@ -2034,6 +2115,25 @@ var _ = Describe("UpgradeStateManager tests", func() {
 	})
 
 })
+
+// revisionHashPodManager returns a PodManager mock that returns hash and err for each
+// DaemonSet revision hash read. hash is a string or a func(context.Context, *appsv1.DaemonSet) string.
+func revisionHashPodManager(hash any, err error) *mocks.PodManager {
+	podManagerMock := &mocks.PodManager{}
+	podManagerMock.On("SchedulePodsRestart", mock.Anything, mock.Anything).Return(nil)
+	podManagerMock.
+		On("GetPodControllerRevisionHash", mock.Anything).
+		Return(
+			func(pod *corev1.Pod) string {
+				return pod.Labels[upgrade.PodControllerRevisionHashLabelKey]
+			},
+			func(pod *corev1.Pod) error {
+				return nil
+			},
+		)
+	podManagerMock.On("GetDaemonsetControllerRevisionHash", mock.Anything, mock.Anything).Return(hash, err)
+	return podManagerMock
+}
 
 func nodeWithUpgradeState(state string) *corev1.Node {
 	return &corev1.Node{

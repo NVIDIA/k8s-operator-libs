@@ -73,6 +73,8 @@ func (nus *NodeUpgradeState) IsOrphanedPod() bool {
 // This state is then used as an input for the ClusterUpgradeStateManager
 type ClusterUpgradeState struct {
 	NodeStates map[string][]*NodeUpgradeState
+	// revisionHashes holds the DaemonSet revision hashes read while this state is applied.
+	revisionHashes map[types.UID]string
 }
 
 // NewClusterUpgradeState creates an empty ClusterUpgradeState object
@@ -263,7 +265,7 @@ func (m *CommonUpgradeManagerImpl) ProcessDoneOrUnknownNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessDoneOrUnknownNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[nodeStateName] {
-		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
+		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, currentClusterState, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
 			return err
@@ -328,7 +330,7 @@ func (m *CommonUpgradeManagerImpl) ProcessDoneOrUnknownNodes(
 //	bool: True if Pod is in sync with DaemonSet. (For Orphanded Pods, always false)
 //	bool: True if the Pod is Orphaned
 //	error: In case of error retrivieng the Revision Hashes
-func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context, state *ClusterUpgradeState,
 	nodeState *NodeUpgradeState) (isPodSynced, isOrphened bool, err error) {
 	if isOrphened = nodeState.IsOrphanedPod(); isOrphened {
 		return isPodSynced, isOrphened, nil
@@ -340,7 +342,7 @@ func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context,
 		return isPodSynced, isOrphened, err
 	}
 	m.Log.V(consts.LogLevelDebug).Info("pod template revision hash", "hash", podRevisionHash)
-	daemonsetRevisionHash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, nodeState.DriverDaemonSet)
+	daemonsetRevisionHash, err := m.daemonSetRevisionHash(ctx, state, nodeState.DriverDaemonSet)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(
 			err, "Failed to get daemonset template revision hash", "daemonset", nodeState.DriverDaemonSet)
@@ -349,6 +351,23 @@ func (m *CommonUpgradeManagerImpl) podInSyncWithDS(ctx context.Context,
 	m.Log.V(consts.LogLevelDebug).Info("daemonset template revision hash", "hash", daemonsetRevisionHash)
 	isPodSynced = podRevisionHash == daemonsetRevisionHash
 	return isPodSynced, isOrphened, nil
+}
+
+// daemonSetRevisionHash reads the revision hash of a DaemonSet once per state.
+func (m *CommonUpgradeManagerImpl) daemonSetRevisionHash(ctx context.Context,
+	state *ClusterUpgradeState, ds *appsv1.DaemonSet) (string, error) {
+	if hash, ok := state.revisionHashes[ds.UID]; ok {
+		return hash, nil
+	}
+	hash, err := m.PodManager.GetDaemonsetControllerRevisionHash(ctx, ds)
+	if err != nil {
+		return "", err
+	}
+	if state.revisionHashes == nil {
+		state.revisionHashes = make(map[types.UID]string)
+	}
+	state.revisionHashes[ds.UID] = hash
+	return hash, nil
 }
 
 // isUpgradeRequested returns true if node is labeled to request an upgrade
@@ -492,7 +511,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 
 	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
-		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
+		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, currentClusterState, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
 			return err
@@ -511,7 +530,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 					err, "Failed to unblock loading of the driver", "nodeState", nodeState)
 				return err
 			}
-			driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
+			driverPodInSync, err := m.isDriverPodInSync(ctx, currentClusterState, nodeState)
 			if err != nil {
 				m.Log.V(consts.LogLevelError).Error(
 					err, "Failed to check if driver pod on the node is in sync", "nodeState", nodeState)
@@ -562,7 +581,7 @@ func (m *CommonUpgradeManagerImpl) ProcessUpgradeFailedNodes(
 	m.Log.V(consts.LogLevelInfo).Info("ProcessUpgradeFailedNodes")
 
 	for _, nodeState := range currentClusterState.NodeStates[UpgradeStateFailed] {
-		driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
+		driverPodInSync, err := m.isDriverPodInSync(ctx, currentClusterState, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(
 				err, "Failed to check if driver pod on the node is in sync", "nodeState", nodeState)
@@ -635,9 +654,9 @@ func (m *CommonUpgradeManagerImpl) ProcessValidationRequiredNodes(
 	return nil
 }
 
-func (m *CommonUpgradeManagerImpl) isDriverPodInSync(ctx context.Context,
+func (m *CommonUpgradeManagerImpl) isDriverPodInSync(ctx context.Context, state *ClusterUpgradeState,
 	nodeState *NodeUpgradeState) (bool, error) {
-	isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
+	isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, state, nodeState)
 	if err != nil {
 		m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
 		return false, err
