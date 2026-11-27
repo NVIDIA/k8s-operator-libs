@@ -23,17 +23,38 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type recordingPodManager struct {
 	PodManager
-	scheduled []*corev1.Pod
+	daemonsetRevision string
+	scheduled         []*corev1.Pod
 }
 
 func (m *recordingPodManager) SchedulePodsRestart(_ context.Context, pods []*corev1.Pod) error {
 	m.scheduled = pods
+	return nil
+}
+
+func (m *recordingPodManager) GetPodControllerRevisionHash(pod *corev1.Pod) (string, error) {
+	return pod.Labels[PodControllerRevisionHashLabelKey], nil
+}
+
+func (m *recordingPodManager) GetDaemonsetControllerRevisionHash(
+	_ context.Context, _ *appsv1.DaemonSet) (string, error) {
+	return m.daemonsetRevision, nil
+}
+
+type noopSafeDriverLoadManager struct{}
+
+func (noopSafeDriverLoadManager) IsWaitingForSafeDriverLoad(context.Context, *corev1.Node) (bool, error) {
+	return false, nil
+}
+
+func (noopSafeDriverLoadManager) UnblockLoading(context.Context, *corev1.Node) error {
 	return nil
 }
 
@@ -47,9 +68,9 @@ func newPodRestartManager(t *testing.T, maxParallelUpgrades int) (*CommonUpgrade
 	}, podManager
 }
 
-// newPodRestartState builds PodRestartRequired nodes with orphaned pods, which skip
-// the DaemonSet revision hash comparison and go straight to the deletion decision.
-func newPodRestartState(nodes int, terminating map[int]bool) *ClusterUpgradeState {
+// newOrphanPodRestartState builds PodRestartRequired nodes with orphaned pods, which
+// skip the DaemonSet revision hash comparison and go straight to the deletion decision.
+func newOrphanPodRestartState(nodes int, terminating map[int]bool) *ClusterUpgradeState {
 	state := NewClusterUpgradeState()
 	for i := 0; i < nodes; i++ {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
@@ -70,6 +91,25 @@ func newPodRestartState(nodes int, terminating map[int]bool) *ClusterUpgradeStat
 	return &state
 }
 
+func newManagedNodeState(name, podRevision string, ready bool) *NodeUpgradeState {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "driver-pod-" + name,
+			Namespace: "gpu-operator",
+			Labels:    map[string]string{PodControllerRevisionHashLabelKey: podRevision},
+		},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "nvidia-driver", Ready: ready}},
+		},
+	}
+	return &NodeUpgradeState{
+		Node:            &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		DriverPod:       pod,
+		DriverDaemonSet: &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "nvidia-driver"}},
+	}
+}
+
 func scheduledNames(pods []*corev1.Pod) []string {
 	names := make([]string, 0, len(pods))
 	for _, pod := range pods {
@@ -81,7 +121,7 @@ func scheduledNames(pods []*corev1.Pod) []string {
 func TestProcessPodRestartNodesLimitsDeletionsPerPass(t *testing.T) {
 	manager, podManager := newPodRestartManager(t, 2)
 
-	if err := manager.ProcessPodRestartNodes(context.Background(), newPodRestartState(5, nil)); err != nil {
+	if err := manager.ProcessPodRestartNodes(context.Background(), newOrphanPodRestartState(5, nil)); err != nil {
 		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
 	}
 	if got := len(podManager.scheduled); got != 2 {
@@ -93,7 +133,7 @@ func TestProcessPodRestartNodesCountsRestartingPods(t *testing.T) {
 	manager, podManager := newPodRestartManager(t, 2)
 
 	if err := manager.ProcessPodRestartNodes(context.Background(),
-		newPodRestartState(4, map[int]bool{0: true})); err != nil {
+		newOrphanPodRestartState(4, map[int]bool{0: true})); err != nil {
 		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
 	}
 	if got := len(podManager.scheduled); got != 1 {
@@ -101,7 +141,7 @@ func TestProcessPodRestartNodesCountsRestartingPods(t *testing.T) {
 	}
 
 	if err := manager.ProcessPodRestartNodes(context.Background(),
-		newPodRestartState(4, map[int]bool{0: true, 1: true})); err != nil {
+		newOrphanPodRestartState(4, map[int]bool{0: true, 1: true})); err != nil {
 		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
 	}
 	if got := len(podManager.scheduled); got != 0 {
@@ -113,7 +153,7 @@ func TestProcessPodRestartNodesNeverReschedulesTerminatingPods(t *testing.T) {
 	manager, podManager := newPodRestartManager(t, 0)
 
 	if err := manager.ProcessPodRestartNodes(context.Background(),
-		newPodRestartState(3, map[int]bool{1: true})); err != nil {
+		newOrphanPodRestartState(3, map[int]bool{1: true})); err != nil {
 		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
 	}
 	want := []string{"driver-pod-0", "driver-pod-2"}
@@ -125,10 +165,44 @@ func TestProcessPodRestartNodesNeverReschedulesTerminatingPods(t *testing.T) {
 func TestProcessPodRestartNodesUnlimited(t *testing.T) {
 	manager, podManager := newPodRestartManager(t, 0)
 
-	if err := manager.ProcessPodRestartNodes(context.Background(), newPodRestartState(5, nil)); err != nil {
+	if err := manager.ProcessPodRestartNodes(context.Background(), newOrphanPodRestartState(5, nil)); err != nil {
 		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
 	}
 	if got := len(podManager.scheduled); got != 5 {
 		t.Fatalf("scheduled %d pod deletions in unlimited mode, want 5", got)
+	}
+}
+
+func TestProcessPodRestartNodesKeepsSlotUntilReplacementReady(t *testing.T) {
+	manager, podManager := newPodRestartManager(t, 1)
+	podManager.daemonsetRevision = "new"
+	manager.SafeDriverLoadManager = noopSafeDriverLoadManager{}
+
+	// node-a was restarted already: its pod has the current revision but is still starting.
+	state := NewClusterUpgradeState()
+	state.NodeStates[UpgradeStatePodRestartRequired] = []*NodeUpgradeState{
+		newManagedNodeState("node-a", "new", false),
+		newManagedNodeState("node-b", "old", true),
+	}
+
+	if err := manager.ProcessPodRestartNodes(context.Background(), &state); err != nil {
+		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
+	}
+	if got := len(podManager.scheduled); got != 0 {
+		t.Fatalf("scheduled %d pod deletions while the replacement is starting, want 0", got)
+	}
+
+	// node-a is ready and leaves the state, so node-b takes the freed slot.
+	next := NewClusterUpgradeState()
+	next.NodeStates[UpgradeStatePodRestartRequired] = []*NodeUpgradeState{
+		newManagedNodeState("node-b", "old", true),
+	}
+
+	if err := manager.ProcessPodRestartNodes(context.Background(), &next); err != nil {
+		t.Fatalf("ProcessPodRestartNodes() error = %v", err)
+	}
+	want := []string{"driver-pod-node-b"}
+	if got := scheduledNames(podManager.scheduled); !slices.Equal(got, want) {
+		t.Fatalf("scheduled pods %v, want %v", got, want)
 	}
 }
