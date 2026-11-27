@@ -111,6 +111,10 @@ type CommonUpgradeManagerImpl struct {
 	validationStateEnabled  bool
 	// optional: when set, route immaterial pod-template changes to a restart-only path
 	restartOnlyPredicate RestartOnlyPredicate
+	// maxParallelUpgrades is the driver pod deletion budget for the current upgrade pass,
+	// set by ApplyState from the upgrade policy; 0 means unlimited.
+	// Not synchronized: a manager instance must not run two reconciles concurrently.
+	maxParallelUpgrades int
 }
 
 // NewCommonUpgradeStateManager creates a new instance of CommonUpgradeManagerImpl
@@ -484,24 +488,85 @@ func (m *CommonUpgradeManagerImpl) ProcessPodDeletionRequiredNodes(
 	return m.PodManager.SchedulePodEviction(ctx, &podManagerConfig)
 }
 
+type podRestartStatus struct {
+	nodeState *NodeUpgradeState
+	podSynced bool
+	orphaned  bool
+}
+
+// restartInProgress reports whether the node already spends an upgrade slot:
+// its driver pod is being deleted, or the replacement pod has not become ready yet.
+func restartInProgress(status podRestartStatus) bool {
+	pod := status.nodeState.DriverPod
+	if pod == nil {
+		return false
+	}
+	if !pod.DeletionTimestamp.IsZero() {
+		return true
+	}
+	return status.podSynced && !status.orphaned && !driverPodReady(pod)
+}
+
+// deletionSlots returns how many driver pods may be deleted in this upgrade pass.
+// A slot stays taken from the deletion until the replacement reports every container
+// ready, so consecutive passes cannot exceed maxParallelUpgrades concurrent restarts.
+// A negative value means unlimited.
+func (m *CommonUpgradeManagerImpl) deletionSlots(statuses []podRestartStatus) int {
+	if m.maxParallelUpgrades <= 0 {
+		return -1
+	}
+	restarting := 0
+	for _, status := range statuses {
+		if restartInProgress(status) {
+			restarting++
+		}
+	}
+	return max(m.maxParallelUpgrades-restarting, 0)
+}
+
 // ProcessPodRestartNodes processes UpgradeStatePodRestartRequired nodes and schedules driver pod restart for them.
 // If the pod has already been restarted and is in Ready state - moves the node to UpgradeStateUncordonRequired state.
 func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 	ctx context.Context, currentClusterState *ClusterUpgradeState) error {
-	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes")
-
-	pods := make([]*corev1.Pod, 0, len(currentClusterState.NodeStates[UpgradeStatePodRestartRequired]))
-	for _, nodeState := range currentClusterState.NodeStates[UpgradeStatePodRestartRequired] {
+	nodes := currentClusterState.NodeStates[UpgradeStatePodRestartRequired]
+	statuses := make([]podRestartStatus, 0, len(nodes))
+	for _, nodeState := range nodes {
 		isPodSynced, isOrphaned, err := m.podInSyncWithDS(ctx, nodeState)
 		if err != nil {
 			m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
 			return err
 		}
-		if !isPodSynced || isOrphaned {
+		statuses = append(statuses, podRestartStatus{
+			nodeState: nodeState,
+			podSynced: isPodSynced,
+			orphaned:  isOrphaned,
+		})
+	}
+
+	slots := m.deletionSlots(statuses)
+	m.Log.V(consts.LogLevelInfo).Info("ProcessPodRestartNodes",
+		"nodesInState", len(statuses),
+		"deletionSlots", slots,
+		"maxParallelUpgrades", m.maxParallelUpgrades)
+
+	pods := make([]*corev1.Pod, 0, len(statuses))
+	throttled := 0
+	for _, status := range statuses {
+		nodeState := status.nodeState
+		if !status.podSynced || status.orphaned {
 			// Pods should only be scheduled for restart if they are not terminating or restarting already
 			// To determinate terminating state we need to check for deletion timestamp which will be set
 			// once pod termination process started
 			if nodeState.DriverPod.DeletionTimestamp.IsZero() {
+				if slots == 0 {
+					throttled++
+					m.Log.V(consts.LogLevelDebug).Info(
+						"Driver pod deletion waits for a free upgrade slot", "node", nodeState.Node.Name)
+					continue
+				}
+				if slots > 0 {
+					slots--
+				}
 				pods = append(pods, nodeState.DriverPod)
 			}
 		} else {
@@ -511,13 +576,7 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 					err, "Failed to unblock loading of the driver", "nodeState", nodeState)
 				return err
 			}
-			driverPodInSync, err := m.isDriverPodInSync(ctx, nodeState)
-			if err != nil {
-				m.Log.V(consts.LogLevelError).Error(
-					err, "Failed to check if driver pod on the node is in sync", "nodeState", nodeState)
-				return err
-			}
-			if driverPodInSync {
+			if driverPodReady(nodeState.DriverPod) {
 				if !m.IsValidationEnabled() {
 					err = m.updateNodeToUncordonOrDoneState(ctx, nodeState)
 					if err != nil {
@@ -549,6 +608,13 @@ func (m *CommonUpgradeManagerImpl) ProcessPodRestartNodes(
 				}
 			}
 		}
+	}
+
+	if throttled > 0 {
+		m.Log.V(consts.LogLevelInfo).Info("Driver pod deletions throttled by maxParallelUpgrades",
+			"skippedNodes", throttled,
+			"scheduledDeletions", len(pods),
+			"maxParallelUpgrades", m.maxParallelUpgrades)
 	}
 
 	// Create pod restart manager to handle pod restarts
@@ -642,27 +708,19 @@ func (m *CommonUpgradeManagerImpl) isDriverPodInSync(ctx context.Context,
 		m.Log.V(consts.LogLevelError).Error(err, "Failed to get daemonset template/pod revision hash")
 		return false, err
 	}
-	if isOrphaned {
-		return false, nil
+	return isPodSynced && !isOrphaned && driverPodReady(nodeState.DriverPod), nil
+}
+
+func driverPodReady(pod *corev1.Pod) bool {
+	if pod == nil || pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) == 0 {
+		return false
 	}
-	// If the pod generation matches the daemonset generation
-	if isPodSynced &&
-		// And the pod is running
-		nodeState.DriverPod.Status.Phase == corev1.PodRunning &&
-		// And it has at least 1 container
-		len(nodeState.DriverPod.Status.ContainerStatuses) != 0 {
-		for i := range nodeState.DriverPod.Status.ContainerStatuses {
-			if !nodeState.DriverPod.Status.ContainerStatuses[i].Ready {
-				// Return false if at least 1 container isn't ready
-				return false, nil
-			}
+	for i := range pod.Status.ContainerStatuses {
+		if !pod.Status.ContainerStatuses[i].Ready {
+			return false
 		}
-
-		// And each container is ready
-		return true, nil
 	}
-
-	return false, nil
+	return true
 }
 
 func (m *CommonUpgradeManagerImpl) isDriverPodFailing(pod *corev1.Pod) bool {

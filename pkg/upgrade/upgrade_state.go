@@ -201,6 +201,8 @@ func (m *ClusterUpgradeStateManagerImpl) ApplyState(ctx context.Context,
 		return nil
 	}
 
+	m.maxParallelUpgrades = upgradePolicy.MaxParallelUpgrades
+
 	m.Log.V(consts.LogLevelInfo).Info("Node states:",
 		"Unknown", len(currentState.NodeStates[UpgradeStateUnknown]),
 		UpgradeStateDone, len(currentState.NodeStates[UpgradeStateDone]),
